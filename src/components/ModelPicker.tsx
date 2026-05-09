@@ -39,18 +39,18 @@ export const ModelPicker: React.FC<Props> = ({ models, loading, currentModel, on
       {/* Header */}
       <Box paddingX={2}>
         <Text color="#6366F1" bold> Model </Text>
-        <Text color="#4B5563">› Wähle ein Model  </Text>
-        <Text color="#374151">aktuell: </Text>
+        <Text color="#4B5563">› Select a model  </Text>
+        <Text color="#374151">current: </Text>
         <Text color="#9CA3AF">{currentModel}</Text>
       </Box>
 
-      {/* Searchbar */}
+      {/* Search bar */}
       <Box paddingX={2} borderStyle="single" borderTop borderColor="#312E81">
         <Text color="#6B7280">/ </Text>
         <TextInput
           value={search}
           onChange={v => { setSearch(v); setSelectedIdx(0) }}
-          placeholder="Model suchen …"
+          placeholder="Search model ..."
           focus={!loading}
         />
       </Box>
@@ -58,12 +58,12 @@ export const ModelPicker: React.FC<Props> = ({ models, loading, currentModel, on
       {/* List */}
       {loading ? (
         <Box paddingX={4} paddingY={1}>
-          <Text color="#6B7280">Lade Models vom Server …</Text>
+          <Text color="#6B7280">Loading models from server ...</Text>
         </Box>
       ) : visibleModels.length === 0 ? (
         <Box paddingX={4} paddingY={1}>
           <Text color="#6B7280">
-            {models.length === 0 ? 'Keine Models gefunden — Server erreichbar?' : 'Keine Treffer'}
+            {models.length === 0 ? 'No models found — is the server reachable?' : 'No matches'}
           </Text>
         </Box>
       ) : (
@@ -84,15 +84,15 @@ export const ModelPicker: React.FC<Props> = ({ models, loading, currentModel, on
 
       {filtered.length > 8 && (
         <Box paddingX={4}>
-          <Text color="#374151">… {filtered.length - 8} weitere (Suche verfeinern)</Text>
+          <Text color="#374151">… {filtered.length - 8} more (refine search)</Text>
         </Box>
       )}
 
       {/* Footer */}
       <Box paddingX={2} borderStyle="single" borderTop borderColor="#312E81">
-        <Text color="#374151">↑↓ </Text><Text color="#4B5563">wählen  </Text>
-        <Text color="#374151">enter </Text><Text color="#4B5563">übernehmen  </Text>
-        <Text color="#374151">esc </Text><Text color="#4B5563">schließen</Text>
+        <Text color="#374151">↑↓ </Text><Text color="#4B5563">select  </Text>
+        <Text color="#374151">enter </Text><Text color="#4B5563">apply  </Text>
+        <Text color="#374151">esc </Text><Text color="#4B5563">close</Text>
       </Box>
 
     </Box>

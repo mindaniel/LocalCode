@@ -37,7 +37,7 @@ export class AgentRuntime extends EventEmitter {
       this.emit('thinking')
       let fullResponse = ''
       const msgs: Message[] = [
-        { role: 'system', content: 'You are ERPCode, a helpful AI coding agent. Reply concisely and directly. Do NOT call any tools. End your reply with DONE: <reply>.' },
+        { role: 'system', content: 'You are LocalCode, a helpful AI coding agent. Reply concisely and directly. Do NOT call any tools. End your reply with DONE: <reply>.' },
         { role: 'user', content: instruction },
       ]
       try {
@@ -84,11 +84,9 @@ export class AgentRuntime extends EventEmitter {
 
       messages.push({ role: 'assistant', content: fullResponse })
 
-      // ── Tool-Call zuerst prüfen (bevor DONE: check) ──────────────────────
       const toolCall = parseToolCall(fullResponse)
 
       if (!toolCall) {
-        // Kein Tool-Call → als finale Antwort ausgeben (DONE: prefix entfernen)
         const clean = extractDoneSummary(fullResponse)
         this.emit('done', { response: clean })
         return
@@ -125,7 +123,7 @@ export class AgentRuntime extends EventEmitter {
       // Confirmation for file write / edit
       if (toolCall.tool === 'write_file' || toolCall.tool === 'edit_file') {
         const filePath = String(toolCall.arguments.path || '')
-        const action = toolCall.tool === 'write_file' ? 'Datei erstellen/überschreiben' : 'Datei bearbeiten'
+        const action = toolCall.tool === 'write_file' ? 'Create/overwrite file' : 'Edit file'
 
         let diffPreview: DiffPreview | undefined
         if (toolCall.tool === 'edit_file') {
@@ -154,9 +152,9 @@ export class AgentRuntime extends EventEmitter {
         this.emit('confirm_required', { toolCall, reason: `${action}: ${filePath}`, diffPreview })
         const ok = await this.waitForConfirmation()
         if (!ok) {
-          const result: ToolResult = { success: false, output: '', error: 'Vom User abgelehnt' }
+          const result: ToolResult = { success: false, output: '', error: 'Denied by user' }
           this.emit('tool_result', { toolCall, result })
-          messages.push({ role: 'user', content: 'User hat die Datei-Operation abgelehnt. Wähle einen anderen Ansatz.' })
+          messages.push({ role: 'user', content: 'User denied the file operation. Try a different approach.' })
           continue
         }
       }
@@ -167,12 +165,12 @@ export class AgentRuntime extends EventEmitter {
         const resolved = resolve(workDir, filePath)
         const workDirNorm = resolve(workDir)
         if (!resolved.startsWith(workDirNorm)) {
-          this.emit('confirm_required', { toolCall, reason: `Datei außerhalb des Workspace lesen: ${resolved}` })
+          this.emit('confirm_required', { toolCall, reason: `Read file outside workspace: ${resolved}` })
           const ok = await this.waitForConfirmation()
           if (!ok) {
-            const result: ToolResult = { success: false, output: '', error: 'Vom User abgelehnt' }
+            const result: ToolResult = { success: false, output: '', error: 'Denied by user' }
             this.emit('tool_result', { toolCall, result })
-            messages.push({ role: 'user', content: 'User hat das Lesen der Datei abgelehnt. Wähle einen anderen Ansatz.' })
+            messages.push({ role: 'user', content: 'User denied reading the file. Try a different approach.' })
             continue
           }
         }
@@ -189,7 +187,6 @@ export class AgentRuntime extends EventEmitter {
         }`,
       })
 
-      // Modell hat Tool-Call + DONE: in einer Antwort → direkt fertig
       if (fullResponse.includes('DONE:')) {
         const summary = extractDoneSummary(fullResponse)
         if (summary) { this.emit('done', { response: summary }); return }
@@ -212,16 +209,10 @@ export class AgentRuntime extends EventEmitter {
   }
 }
 
-// Extrahiert die menschlich lesbare Zusammenfassung aus einer Modellantwort:
-// - entfernt rohe JSON Tool-Calls (auch wenn in ```json ... ``` verpackt)
-// - entfernt DONE: Präfix
 function extractDoneSummary(text: string): string {
   let s = text
-  // Entferne ```json ... ``` Blöcke
   s = s.replace(/```json[\s\S]*?```/gi, '')
-  // Entferne nackte JSON Tool-Call Objekte
   s = s.replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?"arguments"\s*:[\s\S]*?\}/g, '')
-  // Extrahiere Text nach DONE: wenn vorhanden
   const doneMatch = s.match(/DONE:\s*([\s\S]*)/)
   if (doneMatch) s = doneMatch[1]
   return s.trim()
@@ -234,37 +225,37 @@ function friendlyLLMError(err: unknown, cfg: { provider: string; baseURL?: strin
   if (low.includes('fetch failed') || low.includes('econnrefused') || low.includes('econnreset') || low.includes('network')) {
     if (cfg.provider === 'ollama') {
       return [
-        'Ollama ist nicht erreichbar.',
+        'Ollama is not reachable.',
         '',
-        '  • Ollama starten:   ollama serve',
-        '  • Modell laden:     ollama pull ' + cfg.model,
-        '  • URL:              ' + (cfg.baseURL || 'http://localhost:11434'),
+        '  • Start Ollama:  ollama serve',
+        '  • Pull model:    ollama pull ' + cfg.model,
+        '  • URL:           ' + (cfg.baseURL || 'http://localhost:11434'),
         '',
-        '  Alternativ: /config provider lmstudio',
+        '  Switch provider: /config provider lmstudio',
       ].join('\n')
     }
     if (cfg.provider === 'lmstudio') {
       return [
-        'LM Studio ist nicht erreichbar.',
+        'LM Studio is not reachable.',
         '',
-        '  • LM Studio öffnen und einen lokalen Server starten',
-        '  • URL:   ' + (cfg.baseURL || 'http://localhost:1234/v1'),
+        '  • Open LM Studio and start a Local Server',
+        '  • URL:  ' + (cfg.baseURL || 'http://localhost:1234/v1'),
         '',
-        '  URL anpassen: /config url http://localhost:1234/v1',
+        '  Change URL: /config url http://localhost:1234/v1',
       ].join('\n')
     }
     return [
-      `Verbindung fehlgeschlagen (${cfg.provider}).`,
-      '  URL prüfen: /config url <url>',
+      `Connection failed (${cfg.provider}).`,
+      '  Check URL: /config url <url>',
     ].join('\n')
   }
 
   if ((low.includes('model') && (low.includes('not found') || low.includes('does not exist'))) || low.includes('404')) {
     return [
-      `Modell "${cfg.model}" nicht gefunden.`,
+      `Model "${cfg.model}" not found.`,
       '',
-      '  • Modell wechseln:  /config model <name>',
-      '  • Liste:            /models',
+      '  • Switch model:  /config model <name>',
+      '  • List models:   /models',
     ].join('\n')
   }
 

@@ -1,11 +1,11 @@
-# ERPCode Terminal Extension
+# LocalCode Terminal Extension
 
-Opens a terminal in the current workspace and runs `erpcode`.
+Opens a terminal in the current workspace and runs `localcode`.
 
 ## Usage
 
 Run the command:
 
-- `ERPCode: Terminal oeffnen`
+- `LocalCode: Terminal oeffnen`
 
-This opens a terminal and executes `erpcode` in the workspace root.
+This opens a terminal and executes `localcode` in the workspace root.

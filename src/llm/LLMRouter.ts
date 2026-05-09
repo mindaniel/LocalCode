@@ -17,7 +17,7 @@ export class LLMRouter {
       case 'lmstudio':
         return lmstudio.stream(messages, config, onToken)
       default:
-        throw new Error(`Unbekannter Provider: ${config.provider}. Verwende "ollama" oder "lmstudio".`)
+        throw new Error(`Unknown provider: ${config.provider}. Use "ollama" or "lmstudio".`)
     }
   }
 

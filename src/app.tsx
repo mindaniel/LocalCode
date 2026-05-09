@@ -46,13 +46,13 @@ function groupIntoTurns(messages: AgentMessage[]): Turn[] {
   return turns
 }
 
-// ── Line-height estimation (konservativ, verhindert Overflow) ─────────────────
+// ── Line-height estimation ────────────────────────────────────────────────────
 function countLines(text: string, width: number): number {
   return text.split('\n').reduce((s, l) => s + Math.max(1, Math.ceil((l.length || 1) / Math.max(1, width))), 0)
 }
 
 function estimateTurnLines(turn: Turn, innerWidth: number): number {
-  if (turn.type === 'user') return 2  // Zeile + Abstand
+  if (turn.type === 'user') return 2  // row + spacing
 
   let lines = 0
   for (const msg of turn.messages) {
@@ -504,9 +504,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       case 'clear': setMessages([]); return
       case 'help': case '/help':
         addMsg({ type: 'command', commandTitle: 'help', content: [
-          '**Verbindung**',
-          '  /connect                       Server verbinden (Popup)',
-          '  /model                         Model auswählen (Popup)',
+          '**Connection**',
+          '  /connect                       Connect to server (popup)',
+          '  /model                         Select model (popup)',
           '',
           '**Configuration**',
           '  /config                        Show current configuration',
@@ -533,7 +533,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           ? await LLMRouter.getOllamaProvider().checkHealth(cfg.llm.baseURL)
           : await LLMRouter.getLMStudioProvider().checkHealth(cfg.llm.baseURL)
         const provName = isOllama ? 'Ollama' : 'LM Studio'
-        const provHint = isOllama ? 'ollama serve' : 'LM Studio → Local Server starten'
+        const provHint = isOllama ? 'ollama serve' : 'LM Studio → start Local Server'
         addMsg({ type: 'command', commandTitle: 'doctor', content: [
           `  Node.js   : ✓ ${process.version}`,
           `  Platform  : ✓ ${process.platform}`,
@@ -733,7 +733,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
               <>
                 {/* Scroll-Indikator oben */}
                 {hiddenAbove > 0
-                  ? <Box paddingX={2}><Text color="#374151">↑ PageUp  </Text><Text color="#4B5563">{hiddenAbove} ältere Nachrichten</Text></Box>
+                  ? <Box paddingX={2}><Text color="#374151">↑ PageUp  </Text><Text color="#4B5563">{hiddenAbove} older messages</Text></Box>
                   : <Text> </Text>
                 }
 
@@ -745,7 +745,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
                 {/* Scroll-Indikator unten (wenn nach oben gescrollt) */}
                 {hiddenBelow > 0 && (
-                  <Box paddingX={2}><Text color="#374151">↓ PageDown  </Text><Text color="#4B5563">{hiddenBelow} neuere Nachrichten</Text></Box>
+                  <Box paddingX={2}><Text color="#374151">↓ PageDown  </Text><Text color="#4B5563">{hiddenBelow} newer messages</Text></Box>
                 )}
               </>
             )
@@ -808,7 +808,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                 />
               )}
               <Box paddingX={4}>
-                <Text color="#F59E0B">Erlauben? </Text>
+                <Text color="#F59E0B">Allow? </Text>
                 <Text color="#9CA3AF">{confirm.reason} </Text>
                 <Text color="#22C55E">[y]</Text><Text color="#9CA3AF">/</Text><Text color="#EF4444">[n]</Text>
               </Box>
@@ -832,11 +832,11 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
               })}
               <Box paddingX={2} borderStyle="single" borderTop borderColor="#1E3A5F">
                 <Text color="#374151">↑↓ </Text>
-                <Text color="#4B5563">navigieren  </Text>
+                <Text color="#4B5563">navigate  </Text>
                 <Text color="#374151">tab/enter </Text>
-                <Text color="#4B5563">auswählen  </Text>
+                <Text color="#4B5563">select  </Text>
                 <Text color="#374151">esc </Text>
-                <Text color="#4B5563">schließen</Text>
+                <Text color="#4B5563">close</Text>
               </Box>
             </Box>
           )}
@@ -847,7 +847,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
               onConnect={(provider, baseURL) => {
                 cm.setLLM({ provider: provider as any, baseURL })
                 setConnectPopup(false)
-                addMsg({ type: 'done', content: `Verbunden · ${provider}  ${baseURL}` })
+                addMsg({ type: 'done', content: `Connected · ${provider}  ${baseURL}` })
               }}
               onCancel={() => setConnectPopup(false)}
             />

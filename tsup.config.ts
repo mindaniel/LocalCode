@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup'
 
 export default defineConfig({
-  entry: { localcode: 'src/bin/erpcode.tsx' },
+  entry: { localcode: 'src/bin/localcode.tsx' },
   format: ['esm'],
   target: 'node18',
   outDir: 'dist',

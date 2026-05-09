@@ -25,7 +25,7 @@ export class LMStudioProvider {
 
     if (!response.ok) {
       const text = await response.text()
-      throw new Error(`LM Studio Fehler ${response.status}: ${text}`)
+      throw new Error(`LM Studio error ${response.status}: ${text}`)
     }
 
     const reader = response.body!.getReader()

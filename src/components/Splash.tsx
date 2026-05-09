@@ -24,10 +24,10 @@ const CODE_LINES = [
 ]
 
 const TIPS = [
-  'Starten Sie in einem Projektordner für Kontext zur Codebasis',
-  'Shell-Befehle direkt ausführen: $ npm test  oder  ! git status',
+  'Start inside a project folder so the agent has codebase context',
+  'Run shell commands directly: $ npm test  or  ! git status',
   'LM Studio: /config provider lmstudio  |  Ollama: /config provider ollama',
-  'Probieren Sie: auth bug fixen  ·  Architektur analysieren  ·  Tests hinzufügen',
+  'Try: fix auth bug  ·  analyze architecture  ·  add unit tests',
 ]
 
 function getSuggestion(input: string, history: string[]): string {

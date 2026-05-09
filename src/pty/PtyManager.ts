@@ -9,9 +9,11 @@ export class PtyManager extends EventEmitter {
   constructor(cwd: string, shellBin?: string) {
     super()
     this._cwd = cwd
-    const shellExe = shellBin || (
-      process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash'
-    )
+    const shellExe = shellBin || (() => {
+      if (process.platform === 'win32') return 'powershell.exe'
+      if (process.platform === 'darwin') return process.env.SHELL || 'zsh'
+      return process.env.SHELL || 'bash'
+    })()
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports

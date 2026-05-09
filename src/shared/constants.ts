@@ -11,7 +11,11 @@ export const DEFAULT_CONFIG: AppConfig = {
   },
   theme: 'dark',
   fontSize: 14,
-  shell: process.platform === 'win32' ? 'powershell.exe' : process.env.SHELL || 'bash',
+  shell: process.platform === 'win32'
+    ? 'powershell.exe'
+    : process.platform === 'darwin'
+      ? (process.env.SHELL || 'zsh')
+      : (process.env.SHELL || 'bash'),
   workspaceDir: os.homedir(),
   security: {
     allowDangerousCommands: false,
@@ -114,8 +118,8 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
 export const MAX_AGENT_ITERATIONS = 30
 
 export const BUILTIN_COMMANDS = [
-  { cmd: '/connect', description: 'Server verbinden (Popup)' },
-  { cmd: '/model', description: 'Model auswählen (Popup)' },
+  { cmd: '/connect', description: 'Connect to server (popup)' },
+  { cmd: '/model', description: 'Select model (popup)' },
   { cmd: '/config', description: 'Show current configuration' },
   { cmd: '/config model ', description: 'Switch model' },
   { cmd: '/config provider ollama', description: 'Use Ollama (localhost:11434)' },

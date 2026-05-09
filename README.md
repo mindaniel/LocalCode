@@ -1,4 +1,4 @@
-# ⚡ ERPCode
+# ⚡ LocalCode
 
 Futuristic AI Developer Terminal — autonomous coding agent, AI-powered TUI.
 
@@ -7,28 +7,28 @@ Futuristic AI Developer Terminal — autonomous coding agent, AI-powered TUI.
 ```bash
 npm install
 npm run build
-npm link          # makes 'erpcode' available globally
+npm link          # makes 'localcode' available globally
 ```
 
 ### Windows Installer (Inno Setup)
 
 1. Build: `npm install` then `npm run build`
 2. Bundle Node.js: see `installer/BUNDLE_NODE.md`
-3. Open `installer/ERPCodeSetup.iss` in Inno Setup and click Build
-4. Run the generated `ERPCodeSetup.exe`
+3. Open `installer/LocalCodeSetup.iss` in Inno Setup and click Build
+4. Run the generated `LocalCodeSetup.exe`
 
 ## Usage
 
 ```bash
-erpcode                                    # Start interactive TUI
-erpcode fix auth bug                       # Run AI task directly
-erpcode analyze architecture               # Analyze project
-erpcode --provider ollama --model llama3   # Override model
+localcode                                    # Start interactive TUI
+localcode fix auth bug                       # Run AI task directly
+localcode analyze architecture               # Analyze project
+localcode --provider ollama --model llama3   # Override model
 ```
 
 ## Config
 
-`~/.erpcode/config.json` — auto-created on first run.
+`~/.localcode/config.json` — auto-created on first run.
 
 ```json
 {
@@ -69,5 +69,5 @@ Dangerous commands (`rm -rf`, `sudo`, `shutdown`, etc.) are blocked automaticall
 
 ```bash
 npm run dev      # watch + rebuild
-node dist/erpcode.js
+node dist/localcode.js
 ```

@@ -1,9 +1,9 @@
 {
-  "name": "erpcode-terminal",
-  "displayName": "ERPCode Terminal",
-  "description": "Open a terminal and run erpcode in the current workspace.",
+  "name": "localcode-terminal",
+  "displayName": "LocalCode Terminal",
+  "description": "Open a terminal and run localcode in the current workspace.",
   "version": "0.0.1",
-  "publisher": "erpcode",
+  "publisher": "localcode",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -11,30 +11,30 @@
     "Other"
   ],
   "activationEvents": [
-    "onCommand:erpcode.openTerminal",
-    "onView:erpcode.view"
+    "onCommand:localcode.openTerminal",
+    "onView:localcode.view"
   ],
   "main": "./extension.js",
   "contributes": {
     "commands": [
       {
-        "command": "erpcode.openTerminal",
-        "title": "ERPCode: Terminal oeffnen"
+        "command": "localcode.openTerminal",
+        "title": "LocalCode: Terminal oeffnen"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "erpcode",
-          "title": "ERPCode",
-          "icon": "resources/erpcode-icon.svg"
+          "id": "localcode",
+          "title": "LocalCode",
+          "icon": "resources/localcode-icon.svg"
         }
       ]
     },
     "views": {
-      "erpcode": [
+      "localcode": [
         {
-          "id": "erpcode.view",
+          "id": "localcode.view",
           "name": "Chat",
           "type": "webview"
         }

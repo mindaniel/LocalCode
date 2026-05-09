@@ -42,10 +42,12 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
 
 async function runShell(command: string, cwd: string): Promise<ToolResult> {
   try {
+    const isWin = process.platform === 'win32'
     const { stdout, stderr } = await execAsync(command, {
       cwd,
       timeout: 60000,
       maxBuffer: 1024 * 1024 * 10,
+      shell: isWin ? 'cmd.exe' : '/bin/sh',
     })
     const output = stdout + (stderr ? `\nSTDERR:\n${stderr}` : '')
     return { success: true, output: output.trim() || '(no output)' }
@@ -150,8 +152,15 @@ async function listFilesTool(dirPath: string, cwd: string, recursive: boolean): 
 async function searchFilesTool(pattern: string, searchPath: string, cwd: string): Promise<ToolResult> {
   const resolved = resolve(cwd, searchPath)
   const isWin = process.platform === 'win32'
-  const cmd = isWin
-    ? `findstr /s /n /i "${pattern}" "${resolved}\\*" 2>nul`
-    : `grep -rn --include="*.{ts,tsx,js,jsx,py,go,rs,java,cs,cpp,c,h,json,yaml,yml,md}" "${pattern}" "${resolved}" 2>/dev/null | head -60`
+
+  if (isWin) {
+    const cmd = `findstr /s /n /i /r "${pattern}" "${resolved}\\*.ts" "${resolved}\\*.tsx" "${resolved}\\*.js" "${resolved}\\*.jsx" "${resolved}\\*.py" "${resolved}\\*.go" "${resolved}\\*.json" "${resolved}\\*.md" 2>nul`
+    return runShell(cmd, cwd)
+  }
+
+  // Use separate --include per extension for cross-platform compat (macOS + Linux)
+  const includes = ['ts','tsx','js','jsx','py','go','rs','java','cs','cpp','c','h','json','yaml','yml','md']
+    .map(e => `--include="*.${e}"`).join(' ')
+  const cmd = `grep -rn ${includes} "${pattern}" "${resolved}" 2>/dev/null | head -60`
   return runShell(cmd, cwd)
 }

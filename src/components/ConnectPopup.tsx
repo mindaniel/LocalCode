@@ -16,12 +16,12 @@ interface Props {
 }
 
 export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
-  const [step, setStep]                     = useState<Step>('provider')
-  const [search, setSearch]                 = useState('')
-  const [selectedIdx, setSelectedIdx]       = useState(0)
-  const [selectedProv, setSelectedProv]     = useState(PROVIDERS[0])
-  const [ip, setIP]                         = useState('localhost')
-  const [port, setPort]                     = useState('11434')
+  const [step, setStep]                 = useState<Step>('provider')
+  const [search, setSearch]             = useState('')
+  const [selectedIdx, setSelectedIdx]   = useState(0)
+  const [selectedProv, setSelectedProv] = useState(PROVIDERS[0])
+  const [ip, setIP]                     = useState('localhost')
+  const [port, setPort]                 = useState('11434')
 
   const filtered = PROVIDERS.filter(p =>
     p.label.toLowerCase().includes(search.toLowerCase()) ||
@@ -59,8 +59,8 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
   })
 
   const breadcrumb =
-    step === 'provider' ? '› Provider wählen' :
-    step === 'ip'       ? `› ${selectedProv.label} › IP-Adresse` :
+    step === 'provider' ? '› Choose provider' :
+    step === 'ip'       ? `› ${selectedProv.label} › IP address` :
                           `› ${selectedProv.label} › Port`
 
   return (
@@ -72,7 +72,7 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
         <Text color="#4B5563">{breadcrumb}</Text>
       </Box>
 
-      {/* ── Step 1: Provider-Auswahl ── */}
+      {/* Step 1: Provider selection */}
       {step === 'provider' && (
         <>
           <Box paddingX={2} borderStyle="single" borderTop borderColor="#1E3A5F">
@@ -80,13 +80,13 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
             <TextInput
               value={search}
               onChange={v => { setSearch(v); setSelectedIdx(0) }}
-              placeholder="Provider suchen …"
+              placeholder="Search provider ..."
               focus
             />
           </Box>
 
           {filtered.length === 0 ? (
-            <Box paddingX={4}><Text color="#6B7280">Kein Provider gefunden</Text></Box>
+            <Box paddingX={4}><Text color="#6B7280">No provider found</Text></Box>
           ) : (
             filtered.map((p, i) => {
               const sel = i === selectedIdx
@@ -102,17 +102,17 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
         </>
       )}
 
-      {/* ── Step 2: IP ── */}
+      {/* Step 2: IP */}
       {step === 'ip' && (
         <Box paddingX={2} paddingY={1} flexDirection="column">
-          <Text color="#6B7280">IP-Adresse:</Text>
+          <Text color="#6B7280">IP address:</Text>
           <Box marginTop={1} borderStyle="single" borderColor="#1E3A5F" paddingX={1}>
             <TextInput value={ip} onChange={setIP} focus />
           </Box>
         </Box>
       )}
 
-      {/* ── Step 3: Port ── */}
+      {/* Step 3: Port */}
       {step === 'port' && (
         <Box paddingX={2} paddingY={1} flexDirection="column">
           <Text color="#6B7280">Port:</Text>
@@ -126,19 +126,19 @@ export const ConnectPopup: React.FC<Props> = ({ onConnect, onCancel }) => {
       <Box paddingX={2} borderStyle="single" borderTop borderColor="#1E3A5F">
         {step === 'provider' ? (
           <>
-            <Text color="#374151">↑↓ </Text><Text color="#4B5563">wählen  </Text>
-            <Text color="#374151">enter </Text><Text color="#4B5563">weiter  </Text>
-            <Text color="#374151">esc </Text><Text color="#4B5563">schließen</Text>
+            <Text color="#374151">↑↓ </Text><Text color="#4B5563">select  </Text>
+            <Text color="#374151">enter </Text><Text color="#4B5563">next  </Text>
+            <Text color="#374151">esc </Text><Text color="#4B5563">close</Text>
           </>
         ) : step === 'ip' ? (
           <>
-            <Text color="#374151">enter </Text><Text color="#4B5563">weiter  </Text>
-            <Text color="#374151">esc </Text><Text color="#4B5563">zurück</Text>
+            <Text color="#374151">enter </Text><Text color="#4B5563">next  </Text>
+            <Text color="#374151">esc </Text><Text color="#4B5563">back</Text>
           </>
         ) : (
           <>
-            <Text color="#22C55E">enter </Text><Text color="#4B5563">verbinden  </Text>
-            <Text color="#374151">esc </Text><Text color="#4B5563">zurück</Text>
+            <Text color="#22C55E">enter </Text><Text color="#4B5563">connect  </Text>
+            <Text color="#374151">esc </Text><Text color="#4B5563">back</Text>
           </>
         )}
       </Box>
