@@ -1,6 +1,6 @@
 # ⚡ LocalCode
 
-**An AI coding agent that runs entirely in your terminal — no cloud account required.**  
+**An AI coding agent that runs entirely in your terminal no cloud account required.**  
 Point it at a local model (Ollama, LM Studio) or any OpenAI-compatible server and start building.
 
 ![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
@@ -11,14 +11,14 @@ Point it at a local model (Ollama, LM Studio) or any OpenAI-compatible server an
 
 ## What it does
 
-LocalCode gives you an autonomous agent that can read your codebase, write and edit files, run shell commands, and commit to git — all from a keyboard-driven terminal UI. You describe the task, the agent does the work, and asks for your confirmation before touching anything destructive.
+LocalCode gives you an autonomous agent that can read your codebase, write and edit files, run shell commands, and commit to git all from a keyboard-driven terminal UI. You describe the task, the agent does the work, and asks for your confirmation before touching anything destructive.
 
 ---
 
 ## Requirements
 
-- **Node.js 18+** — [nodejs.org](https://nodejs.org)
-- A running **local LLM server** — Ollama or LM Studio (see below)
+- **Node.js 18+** [nodejs.org](https://nodejs.org)
+- A running **local LLM server** Ollama or LM Studio (see below)
 
 ---
 
@@ -26,7 +26,7 @@ LocalCode gives you an autonomous agent that can read your codebase, write and e
 
 ### 1. Install a local model server
 
-**Ollama** (recommended — free, works on Linux / macOS / Windows)
+**Ollama** (recommended free, works on Linux / macOS / Windows)
 
 ```bash
 # Install from https://ollama.com, then run:
@@ -34,7 +34,7 @@ ollama serve
 ollama pull deepseek-coder   # or any model you prefer
 ```
 
-**LM Studio** — download the desktop app from [lmstudio.ai](https://lmstudio.ai), load a model, and click **Start Local Server**.
+**LM Studio** download the desktop app from [lmstudio.ai](https://lmstudio.ai), load a model, and click **Start Local Server**.
 
 ---
 
@@ -75,9 +75,9 @@ localcode explain the architecture of this project
 
 Type `/connect` and press `Enter` to open the connection popup:
 
-1. **Choose a provider** — Ollama, LM Studio, or any OpenAI-compatible API
-2. **Enter the IP address** — use `localhost` for a server on the same machine
-3. **Enter the port** — `11434` for Ollama, `1234` for LM Studio
+1. **Choose a provider** Ollama, LM Studio, or any OpenAI-compatible API
+2. **Enter the IP address** use `localhost` for a server on the same machine
+3. **Enter the port** `11434` for Ollama, `1234` for LM Studio
 
 The connection is saved automatically to `~/.localcode/config.json`.
 
@@ -101,7 +101,7 @@ Type `/model` to open the model picker. LocalCode fetches all available models f
 | `Ctrl+L` | Clear the screen |
 | `Esc` | Close popup / cancel input |
 
-**Shell passthrough** — prefix a command with `$` or `!` to run it directly without the agent:
+**Shell passthrough** prefix a command with `$` or `!` to run it directly without the agent:
 
 ```
 $ npm test
@@ -156,7 +156,7 @@ When you give it a task, the agent can:
 
 - Read and search files in your project
 - Write new files or edit existing ones (with a diff preview and confirmation before applying)
-- Run shell commands — git, npm, compilers, test runners, anything
+- Run shell commands git, npm, compilers, test runners, anything
 - Create git commits
 
 **Safety:** Dangerous operations (`rm -rf`, `sudo`, force-push, database drops) are blocked automatically. File writes and shell commands ask for confirmation before running.
@@ -191,10 +191,10 @@ Contributions are welcome. To get started:
 5. Test with `node dist/localcode.js`
 6. Open a pull request with a clear description of what you changed and why
 
-Please keep pull requests focused — one feature or fix per PR. If you're planning something large, open an issue first to discuss the approach.
+Please keep pull requests focused one feature or fix per PR. If you're planning something large, open an issue first to discuss the approach.
 
 ---
 
 ## License
 
-[MIT](./LICENSE) — free to use, modify, and distribute.
+[MIT](./LICENSE) free to use, modify, and distribute.
