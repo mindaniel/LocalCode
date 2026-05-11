@@ -92,8 +92,10 @@ async function runGoVet(workDir: string, targetFile?: string): Promise<LspResult
 async function runPyflakes(workDir: string, targetFile?: string): Promise<LspResult> {
   try {
     const target = targetFile ? `"${targetFile}"` : '.'
+    // python3 is the standard on modern Linux; fall back to python for older setups
+    const py = await execAsync('python3 --version 2>&1').then(() => 'python3').catch(() => 'python')
     const { stdout, stderr } = await execAsync(
-      `python -m pyflakes ${target} 2>&1 || true`,
+      `${py} -m pyflakes ${target} 2>&1 || true`,
       { cwd: workDir, timeout: 15000 }
     )
     return { diagnostics: parsePyflakes(stdout + stderr), tool: 'pyflakes' }

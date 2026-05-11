@@ -103,14 +103,22 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
   }
 }
 
+function getShell(): string {
+  if (process.platform === 'win32') return 'cmd.exe'
+  // Use the user's shell if it's POSIX-compatible; fish uses incompatible syntax
+  const s = process.env.SHELL || ''
+  if (s && !/fish/.test(s)) return s
+  // Prefer bash for richer syntax support; fall back to POSIX sh
+  return '/bin/bash'
+}
+
 async function runShell(command: string, cwd: string): Promise<ToolResult> {
   try {
-    const isWin = process.platform === 'win32'
     const { stdout, stderr } = await execAsync(command, {
       cwd,
       timeout: 60000,
       maxBuffer: 1024 * 1024 * 10,
-      shell: isWin ? 'cmd.exe' : '/bin/sh',
+      shell: getShell(),
     })
     const output = stdout + (stderr ? `\nSTDERR:\n${stderr}` : '')
     return { success: true, output: output.trim() || '(no output)' }
