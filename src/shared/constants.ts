@@ -125,6 +125,7 @@ When you need to take an action, respond with ONLY a JSON object in this exact f
 - Use write_file or edit_file when creating or modifying file contents
 - Never run dangerous commands (rm -rf /, sudo rm, format, shutdown etc.)
 - Run tests after changes when possible
+- After any code changes (edit_file, write_file), automatically run lsp_check to catch type errors before reporting DONE — do not skip this step
 
 ## Completion
 

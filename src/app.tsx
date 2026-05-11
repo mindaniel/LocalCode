@@ -12,6 +12,7 @@ import { MarkdownText } from './components/MarkdownText'
 import { ConnectPopup } from './components/ConnectPopup'
 import { ModelPicker } from './components/ModelPicker'
 import { FilePicker } from './components/FilePicker'
+import { InfoPopup } from './components/InfoPopup'
 import { AgentRuntime, DiffPreview } from './agent/AgentRuntime'
 import { ConfigManager } from './config/ConfigManager'
 import { PtyManager } from './pty/PtyManager'
@@ -64,7 +65,7 @@ let _id = 0
 const nextId = () => String(++_id)
 
 type AgentStatus = 'idle' | 'running' | 'thinking' | 'error'
-interface ConfirmRequest { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview }
+interface ConfirmRequest { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview; dangerous?: boolean }
 interface AppProps { initialCommand?: string; cwd: string }
 
 // ── Turn grouping ─────────────────────────────────────────────────────────────
@@ -403,6 +404,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const [mode, setMode]                   = useState<'build' | 'plan'>('build')
   const [pluginCmds, setPluginCmds]       = useState<Array<{ cmd: string; description: string }>>([])
   const [convHistory, setConvHistory]     = useState<import('./shared/types').Message[]>([])
+  const [infoPopup, setInfoPopup]         = useState<{ title: string; content: string } | null>(null)
+  const [infoScroll, setInfoScroll]       = useState(0)
 
   const agentRef      = useRef<AgentRuntime | null>(null)
   const ptyRef        = useRef<PtyManager | null>(null)
@@ -416,7 +419,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
   const s = useRef({ agentStatus, isRunning: false, attachments, mode, pickerIdx, messages, convHistory })
   s.current = { agentStatus, isRunning: agentStatus === 'thinking' || agentStatus === 'running', attachments, mode, pickerIdx, messages, convHistory }
 
-  const showSplash = messages.length === 0 && agentStatus === 'idle' && !confirm
+  const showSplash = messages.length === 0 && agentStatus === 'idle' && !confirm && !connectPopup && !modelPicker && !filePicker && !infoPopup
 
   // Slash-command picker: filter BUILTIN_COMMANDS when input starts with /
   const allSlashCmds = [...BUILTIN_COMMANDS, ...pluginCmds]
@@ -452,6 +455,11 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     const loader = PluginLoader.getInstance()
     loader.load()
     setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+  }, [])
+
+  const showInfo = useCallback((title: string, lines: string[]) => {
+    setInfoPopup({ title, content: lines.join('\n') })
+    setInfoScroll(0)
   }, [])
 
   const addMsg = useCallback((msg: Omit<AgentMessage, 'id' | 'timestamp'>) => {
@@ -502,7 +510,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
       if (!sub) {
         const cfg = cm.get()
-        addMsg({ type: 'command', commandTitle: 'config', content: [
+        showInfo('config', [
           `  config path : ${cm.getConfigPath()}`,
           '',
           `  provider    : ${cfg.llm.provider}`,
@@ -516,7 +524,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           '  /config model <name>         Switch model',
           '  /config url <url>            Override base URL',
           '  /config temperature <val>    Set temperature  (0.0–1.0)',
-        ].join('\n') })
+        ])
       } else {
         switch (sub.toLowerCase()) {
           case 'model':
@@ -555,7 +563,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
     // ── exit / clear (also without slash) ────────────────────────────────────
     if (input === '/exit' || input === 'exit' || input === 'quit') { exit(); return }
-    if (input === '/clear' || input === 'clear') { setMessages([]); setConvHistory([]); return }
+    if (input === '/clear' || input === 'clear') { setMessages([]); setConvHistory([]); setInfoPopup(null); return }
 
     // ── /lsp ──────────────────────────────────────────────────────────────────
     if (input === '/lsp' || input.startsWith('/lsp ')) {
@@ -627,9 +635,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
       if (!sub || sub === 'list') {
         const sessions = cm.listSessions()
-        addMsg({ type: 'command', commandTitle: 'sessions', content: sessions.length
-          ? sessions.map(s => `  • ${s}`).join('\n')
-          : '  No sessions saved yet. Use /session save <name>' })
+        showInfo('sessions', sessions.length
+          ? ['**Saved sessions**', '', ...sessions.map(s => `  • ${s}`), '', '  /session load <name>   Restore  ·  /session delete <name>   Remove']
+          : ['  No sessions saved yet.', '', '  /session save <name>   Bookmark this conversation'])
       } else if (sub === 'save') {
         if (!name || name === 'save') { addMsg({ type: 'error', content: 'Usage: /session save <name>' }); return }
         cm.saveSession(name, messages)
@@ -685,7 +693,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       if (!sub || sub === 'list') {
         const plugins = loader.getAll()
         const errors  = loader.getErrors()
-        const lines: string[] = []
+        const lines: string[] = ['**Plugins**', '']
         if (plugins.length === 0 && errors.length === 0) {
           lines.push(`  No plugins installed.`)
           lines.push(`  Plugin dir: ${loader.getPluginDir()}`)
@@ -701,7 +709,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           }
           for (const e of errors) lines.push(`  ✗ ${e.file}: ${e.error}`)
         }
-        addMsg({ type: 'command', commandTitle: 'plugins', content: lines.join('\n') })
+        showInfo('plugins', lines)
       } else if (sub === 'install') {
         if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin install <path>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
         setAgentStatus('thinking')
@@ -768,10 +776,10 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
       case 'exit': case 'quit': exit(); return
       case 'clear': setMessages([]); return
       case 'help': case '/help':
-        addMsg({ type: 'command', commandTitle: 'help', content: [
+        showInfo('help', [
           '**Attachments**',
           '  /attach                        Attach file or image (@-picker)',
-          '  @path/to/file                  Include file in message (type in input)',
+          '  @path/to/file                  Include file in message',
           '',
           '**Session**',
           '  /session                       List saved sessions',
@@ -793,31 +801,32 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           '  /config temperature <val>      Set temperature (0.0–1.0)',
           '',
           '**System**',
-          '  /lsp                           Run diagnostics (tsc/cargo/go vet/pyflakes/eslint)',
+          '  /lsp                           Run diagnostics (tsc/cargo/go vet/eslint)',
           '  /models                        List available models',
           '  /doctor                        Check connection & status',
           '  /clear                         Clear screen',
           '  /exit                          Quit',
           '',
           '**Keyboard shortcuts**',
-          '  ctrl+c                         Abort running agent  /  quit',
+          '  ctrl+c                         Abort agent  /  quit',
           '  ctrl+l                         Clear chat history',
           '  ctrl+k                         Clear input line',
-          '  ↑ ↓                            Navigate history',
-          '  tab                            Autocomplete  /  toggle BUILD↔PLAN mode',
-          '  PageUp / PageDown              Scroll chat',
+          '  ↑ ↓                            Navigate input history',
+          '  tab                            Autocomplete / toggle BUILD↔PLAN',
+          '  scroll wheel / PgUp / PgDn     Scroll chat',
           '',
           '**Shell**',
           '  $ <cmd>   or   ! <cmd>         e.g.: $ npm test',
           '',
           '**Plugins**',
           '  /plugin                        List installed plugins',
-          '  /plugin install <path>         Install plugin from directory or .js file',
+          '  /plugin install <path>         Install plugin',
           '  /plugin remove <name>          Uninstall a plugin',
           '  /plugin reload                 Reload all plugins',
-        ].join('\n') })
+        ])
         break
       case 'doctor': {
+        showInfo('doctor', ['  Checking…'])
         const cfg = cm.get()
         const isOllama = cfg.llm.provider === 'ollama'
         const healthy = isOllama
@@ -825,7 +834,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           : await LLMRouter.getLMStudioProvider().checkHealth(cfg.llm.baseURL)
         const provName = isOllama ? 'Ollama' : 'LM Studio'
         const provHint = isOllama ? 'ollama serve' : 'LM Studio → start Local Server'
-        addMsg({ type: 'command', commandTitle: 'doctor', content: [
+        showInfo('doctor', [
           `  Node.js   : ✓ ${process.version}`,
           `  Platform  : ✓ ${process.platform}`,
           `  ${provName.padEnd(9)}: ${healthy ? '✓ Reachable' : `✗ Not reachable — ${provHint}`}`,
@@ -833,21 +842,22 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           `  Model     : ${cfg.llm.model}`,
           `  URL       : ${cfg.llm.baseURL || '(default)'}`,
           `  Config    : ${cm.getConfigPath()}`,
-        ].join('\n') })
+        ])
         break
       }
       case 'models': {
+        showInfo('models', ['  Loading…'])
         const cfg = cm.get()
         const isOllama = cfg.llm.provider === 'ollama'
         const models = isOllama
           ? await LLMRouter.getOllamaProvider().listModels(cfg.llm.baseURL)
           : await LLMRouter.getLMStudioProvider().listModels(cfg.llm.baseURL)
         const provName = isOllama ? 'Ollama' : 'LM Studio'
-        addMsg({ type: 'command', commandTitle: 'models', content: models.length
-          ? models.map(m => `  • ${m}`).join('\n')
+        showInfo('models', models.length
+          ? ['**Available models**', '', ...models.map(m => `  • ${m}`), '', `  /config model <name>  to switch`]
           : isOllama
-            ? '  No Ollama models found. Pull one with: ollama pull deepseek-coder'
-            : '  No LM Studio models found. Open LM Studio and load a model.' })
+            ? ['  No Ollama models found.', '', '  $ ollama pull deepseek-coder']
+            : ['  No LM Studio models found.', '', '  Open LM Studio and load a model.'])
         break
       }
       default: {
@@ -917,8 +927,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         agent.on('tool_result', ({ toolCall, result }: { toolCall: ToolCall; result: ToolResult }) => {
           addMsg({ type: 'tool_result', content: '', toolCall, toolResult: result })
         })
-        agent.on('confirm_required', ({ toolCall, reason, diffPreview }: { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview }) => {
-          setConfirm({ toolCall, reason, diffPreview })
+        agent.on('confirm_required', ({ toolCall, reason, diffPreview, dangerous }: { toolCall: ToolCall; reason: string; diffPreview?: DiffPreview; dangerous?: boolean }) => {
+          setConfirm({ toolCall, reason, diffPreview, dangerous })
         })
         agent.on('injection', ({ message }: { message: string }) => {
           // Already shown in the UI when inject() was called; just acknowledge
@@ -963,6 +973,16 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         setModelPicker(false)
         setFilePicker(false)
       }
+      return
+    }
+
+    // ── Info-Popup Navigation ──
+    if (infoPopup) {
+      if (inp.escape || (inp.ctrl && key === 'c')) { setInfoPopup(null); setInfoScroll(0); return }
+      if (inp.upArrow)   { setInfoScroll(s => Math.max(0, s - 1));  return }
+      if (inp.downArrow) { setInfoScroll(s => s + 1);               return }
+      if (inp.pageUp)    { setInfoScroll(s => Math.max(0, s - 10)); return }
+      if (inp.pageDown)  { setInfoScroll(s => s + 10);              return }
       return
     }
 
@@ -1046,7 +1066,17 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
         <>
           <Box flexGrow={1} flexShrink={1} />
 
-          {(() => {
+          {infoPopup ? (
+            <InfoPopup
+              title={infoPopup.title}
+              content={infoPopup.content}
+              scroll={infoScroll}
+              termRows={termRows}
+              termCols={termCols}
+            />
+          ) : null}
+
+          {!infoPopup && (() => {
             const pickerH   = showPicker ? slashCmds.length + 3 : 0
             const streamH   = (currentTokens || isRunning) ? (currentTokens.includes('<think>') ? 5 : 2) : 0
             const attachH   = attachments.length > 0 ? 1 : 0
@@ -1093,12 +1123,34 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             )
           })()}
 
-          {/* Live streaming block */}
+          {/* Live streaming block — height-capped so input is never pushed off */}
           {(currentTokens || (isRunning && !currentTokens)) && (() => {
             const { thinking, response, stillThinking } = parseThinking(currentTokens)
-            const cleanResponse = response
-              .replace(/```json[\s\S]*?```/g, '')
-              .replace(/\{[\s\S]*?"tool"\s*:/g, '')
+            // Strip everything from where a tool-call JSON starts (complete or mid-stream)
+            let cleanResponse = response.replace(/```json[\s\S]*?```/gi, '')
+            const toolIdx = cleanResponse.search(/\{[\s\S]*?"tool"\s*:/)
+            if (toolIdx !== -1) cleanResponse = cleanResponse.slice(0, toolIdx)
+            cleanResponse = cleanResponse.trim()
+
+            // How many terminal lines can the streaming block use?
+            // Reserve: input box (4) + hint bar (1) + status (1) + think header (thinking ? 2 : 0) + padding (3)
+            const thinkReserve = thinking ? 2 + 3 : 0  // header + up to 3 think lines
+            const maxStreamLines = Math.max(3, termRows - 14 - thinkReserve)
+
+            // Slice to last N *rendered* lines (each source line may wrap)
+            const innerW = Math.max(20, termCols - 10)
+            const srcLines = cleanResponse.split('\n')
+            const rendered: string[] = []
+            for (const l of srcLines) {
+              if (!l) { rendered.push(''); continue }
+              const chunks = Math.max(1, Math.ceil(l.length / innerW))
+              for (let c = 0; c < chunks; c++) rendered.push(l.slice(c * innerW, (c + 1) * innerW))
+            }
+            const overflow = Math.max(0, rendered.length - maxStreamLines)
+            const visibleText = overflow > 0
+              ? srcLines.slice(-Math.max(1, Math.floor(maxStreamLines * 0.9))).join('\n')
+              : cleanResponse
+
             const thinkLines = thinking.trimEnd().split('\n').filter(l => l.trim()).slice(-3)
 
             return (
@@ -1118,13 +1170,19 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                     ))}
                   </Box>
                 )}
+                {overflow > 0 && (
+                  <Box>
+                    <Text color="#3B82F6">  │ </Text>
+                    <Text color="#4B5563">↑ {overflow} lines above…</Text>
+                  </Box>
+                )}
                 <Box>
                   <Text color="#3B82F6">  │ </Text>
                   <Box flexGrow={1}>
                     {!currentTokens
                       ? <Box><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
-                      : cleanResponse
-                        ? <Box><Text color="#D1D5DB" wrap="wrap">{cleanResponse}</Text><Text color="#3B82F6">█</Text></Box>
+                      : visibleText
+                        ? <Box><Text color="#D1D5DB" wrap="wrap">{visibleText}</Text><Text color="#3B82F6">█</Text></Box>
                         : stillThinking
                           ? <Box><Text color="#6366F1">Thinking </Text><ThinkingDots label="" /></Box>
                           : null
@@ -1137,7 +1195,13 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
 
           {/* Confirm dialog */}
           {confirm && (
-            <Box flexDirection="column" marginX={1} marginBottom={1} borderStyle="single" borderColor="#F59E0B">
+            <Box flexDirection="column" marginX={1} marginBottom={1} borderStyle="single"
+              borderColor={confirm.dangerous ? '#EF4444' : '#F59E0B'}>
+              {confirm.dangerous && (
+                <Box paddingX={2} paddingTop={0}>
+                  <Text backgroundColor="#7F1D1D" color="#FCA5A5" bold> ⚠  DANGEROUS OPERATION — review carefully </Text>
+                </Box>
+              )}
               {confirm.diffPreview && (
                 <DiffView
                   filePath={confirm.diffPreview.filePath}
@@ -1149,7 +1213,9 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                 />
               )}
               <Box paddingX={2} paddingY={0}>
-                <Text color="#F59E0B">Allow  </Text>
+                <Text color={confirm.dangerous ? '#EF4444' : '#F59E0B'}>
+                  {confirm.dangerous ? '⚠ ' : ''}Allow{confirm.dangerous ? '' : ''}{'  '}
+                </Text>
                 <Text color="#D1D5DB">{confirm.reason}</Text>
                 <Text color="#4B5563">  </Text>
                 <Text color="#22C55E">[y] yes</Text>
@@ -1215,8 +1281,8 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
             </Box>
           )}
 
-          {/* ── Input box ── */}
-          <Box flexDirection="column" borderStyle="single" borderColor={mode === 'plan' ? '#14532D' : '#1E3A5F'} marginX={1}>
+          {/* ── Input box (hidden when info popup is open) ── */}
+          {!infoPopup && <Box flexDirection="column" borderStyle="single" borderColor={mode === 'plan' ? '#14532D' : '#1E3A5F'} marginX={1}>
             {/* Attachment strip */}
             {attachments.length > 0 && (
               <Box paddingX={1} flexDirection="row">
@@ -1289,7 +1355,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
                 <Text color="#9CA3AF">{config.llm.model.length > 24 ? config.llm.model.slice(0, 24) + '…' : config.llm.model}</Text>
               </Box>
             </Box>
-          </Box>
+          </Box>}
 
           {/* Status bar — 1 line */}
           <StatusBar config={config} cwd={cwd} agentStatus={agentStatus} tokenCount={tokenCount} mode={mode} />

@@ -173,24 +173,20 @@ export class AgentRuntime extends EventEmitter {
         return
       }
 
-      // Security: block dangerous shell commands before asking
-      if (toolCall.tool === 'run_shell') {
-        const command = String(toolCall.arguments.command || '')
-        const guard = CommandGuard.check(command)
-        if (!guard.safe) {
-          const result: ToolResult = { success: false, output: '', error: `Blocked: ${guard.reason}` }
-          this.emit('tool_call', { toolCall, blocked: true, reason: guard.reason })
-          this.emit('tool_result', { toolCall, result })
-          messages.push({
-            role: 'user',
-            content: `Command was blocked by security guard: ${guard.reason}. Choose a safer approach.`,
-          })
-          continue
-        }
-      }
-
       // Read-only tools: skip confirmation entirely — they have no side effects
       if (!READ_ONLY_TOOLS.has(toolCall.tool)) {
+        // Dangerous shell command? Ask the user explicitly with a warning before proceeding.
+        let dangerous = false
+        let dangerReason = ''
+        if (toolCall.tool === 'run_shell') {
+          const command = String(toolCall.arguments.command || '')
+          const guard = CommandGuard.check(command)
+          if (!guard.safe) {
+            dangerous = true
+            dangerReason = guard.reason
+          }
+        }
+
         let diffPreview: DiffPreview | undefined
         if (toolCall.tool === 'edit_file') {
           const filePath = String(toolCall.arguments.path || '')
@@ -216,8 +212,8 @@ export class AgentRuntime extends EventEmitter {
           } catch {}
         }
 
-        const confirmReason = toolCallReason(toolCall)
-        this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview })
+        const confirmReason = dangerous ? dangerReason : toolCallReason(toolCall)
+        this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview, dangerous })
         const { confirmed, timedOut } = await this.waitForConfirmation()
         if (!confirmed) {
           const result: ToolResult = { success: false, output: '', error: timedOut ? 'Confirmation timed out' : 'Denied by user' }
@@ -225,7 +221,9 @@ export class AgentRuntime extends EventEmitter {
           this.emit('done', {
             response: timedOut
               ? 'No response in 30 seconds — task stopped.'
-              : 'Task stopped — action denied by user.',
+              : dangerous
+                ? 'Task stopped — dangerous command denied.'
+                : 'Task stopped — action denied by user.',
             aborted: true,
           })
           return
