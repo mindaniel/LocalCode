@@ -1,18 +1,26 @@
 {
-  "name": "localcode",
-  "version": "0.1.0",
+  "name": "localcode-agent",
+  "version": "0.1.1",
   "description": "Futuristic AI Developer Terminal & Autonomous Coding Agent",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/"
+  ],
   "bin": {
-    "localcode": "./dist/localcode.js",
-    "local": "./dist/localcode.js"
+    "localcode": "dist/localcode.js",
+    "local": "dist/localcode.js"
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "start": "node dist/localcode.js",
-    "link:dev": "npm run build && npm link"
+    "link:dev": "npm run build && npm link",
+    "prepublishOnly": "npm run build",
+    "publish:npm": "npm publish"
   },
   "dependencies": {
     "chalk": "^4.1.2",

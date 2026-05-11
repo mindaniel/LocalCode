@@ -810,6 +810,14 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
           '  /clear                         Clear screen',
           '  /exit                          Quit',
           '',
+          '**Keyboard shortcuts**',
+          '  ctrl+c                         Abort running agent  /  quit',
+          '  ctrl+l                         Clear chat history',
+          '  ctrl+k                         Clear input line',
+          '  ↑ ↓                            Navigate history',
+          '  tab                            Autocomplete  /  toggle BUILD↔PLAN mode',
+          '  PageUp / PageDown              Scroll chat',
+          '',
           '**Shell**',
           '  $ <cmd>   or   ! <cmd>         e.g.: $ npm test',
           '',
@@ -1029,6 +1037,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd }) => {
     }
 
     if (inp.ctrl && key === 'l') { setMessages([]); return }
+    if (inp.ctrl && key === 'k') { setInputValue(''); setHistIndex(-1); return }
 
     if (confirm) {
       if (key === 'y' || key === 'Y') { agentRef.current?.confirm(true); setConfirm(null) }

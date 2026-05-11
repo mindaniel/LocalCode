@@ -13,6 +13,11 @@ import { PluginLoader } from '../plugins/PluginLoader'
 // Short inputs that are clearly conversational — no tools needed
 const CONVERSATIONAL = /^(hi|hey|hello|sup|yo|hallo|hej|ciao|howdy|how are you|what can you do|what are you|who are you|thanks|thank you|danke|ok|okay|cool|nice|great|good|yes|no|nope|yep|sure|help me|what\??)[\s!?.]*$/i
 
+const READ_ONLY_TOOLS = new Set([
+  'read_file', 'list_files', 'find_files', 'search_files',
+  'git_status', 'git_diff', 'git_log', 'lsp_check',
+])
+
 export class AgentRuntime extends EventEmitter {
   private aborted = false
   private confirmResolve: ((ok: boolean) => void) | null = null
@@ -183,40 +188,47 @@ export class AgentRuntime extends EventEmitter {
         }
       }
 
-      // Universal confirmation: ask for EVERY tool before executing
-      let diffPreview: DiffPreview | undefined
-      if (toolCall.tool === 'edit_file') {
-        const filePath = String(toolCall.arguments.path || '')
-        const oldStr = String(toolCall.arguments.old || '')
-        const newStr = String(toolCall.arguments.new || '')
-        try {
-          const content = await readFile(resolve(workDir, filePath), 'utf-8')
-          if (content.includes(oldStr)) {
-            const idx = content.indexOf(oldStr)
-            const startLine = content.slice(0, idx).split('\n').length
-            const allLines = content.split('\n')
-            const oldLines = oldStr.split('\n')
-            const CONTEXT = 3
-            diffPreview = {
-              filePath,
-              oldLines,
-              newLines: newStr.split('\n'),
-              startLine,
-              contextBefore: allLines.slice(Math.max(0, startLine - 1 - CONTEXT), startLine - 1),
-              contextAfter: allLines.slice(startLine - 1 + oldLines.length, startLine - 1 + oldLines.length + CONTEXT),
+      // Read-only tools: skip confirmation entirely — they have no side effects
+      if (!READ_ONLY_TOOLS.has(toolCall.tool)) {
+        let diffPreview: DiffPreview | undefined
+        if (toolCall.tool === 'edit_file') {
+          const filePath = String(toolCall.arguments.path || '')
+          const oldStr = String(toolCall.arguments.old || '')
+          const newStr = String(toolCall.arguments.new || '')
+          try {
+            const content = await readFile(resolve(workDir, filePath), 'utf-8')
+            if (content.includes(oldStr)) {
+              const idx = content.indexOf(oldStr)
+              const startLine = content.slice(0, idx).split('\n').length
+              const allLines = content.split('\n')
+              const oldLines = oldStr.split('\n')
+              const CONTEXT = 3
+              diffPreview = {
+                filePath,
+                oldLines,
+                newLines: newStr.split('\n'),
+                startLine,
+                contextBefore: allLines.slice(Math.max(0, startLine - 1 - CONTEXT), startLine - 1),
+                contextAfter: allLines.slice(startLine - 1 + oldLines.length, startLine - 1 + oldLines.length + CONTEXT),
+              }
             }
-          }
-        } catch {}
-      }
+          } catch {}
+        }
 
-      const confirmReason = toolCallReason(toolCall)
-      this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview })
-      const confirmed = await this.waitForConfirmation()
-      if (!confirmed) {
-        const result: ToolResult = { success: false, output: '', error: 'Denied by user' }
-        this.emit('tool_result', { toolCall, result })
-        this.emit('done', { response: 'Task stopped — action denied by user.', aborted: true })
-        return
+        const confirmReason = toolCallReason(toolCall)
+        this.emit('confirm_required', { toolCall, reason: confirmReason, diffPreview })
+        const { confirmed, timedOut } = await this.waitForConfirmation()
+        if (!confirmed) {
+          const result: ToolResult = { success: false, output: '', error: timedOut ? 'Confirmation timed out' : 'Denied by user' }
+          this.emit('tool_result', { toolCall, result })
+          this.emit('done', {
+            response: timedOut
+              ? 'No response in 30 seconds — task stopped.'
+              : 'Task stopped — action denied by user.',
+            aborted: true,
+          })
+          return
+        }
       }
 
       this.emit('tool_call', { toolCall })
@@ -242,13 +254,13 @@ export class AgentRuntime extends EventEmitter {
     this.emit('done', { response: 'Reached maximum iteration limit.' })
   }
 
-  private waitForConfirmation(): Promise<boolean> {
+  private waitForConfirmation(): Promise<{ confirmed: boolean; timedOut: boolean }> {
     return new Promise((resolve) => {
-      this.confirmResolve = resolve
+      this.confirmResolve = (ok: boolean) => resolve({ confirmed: ok, timedOut: false })
       setTimeout(() => {
         if (this.confirmResolve) {
           this.confirmResolve = null
-          resolve(false)
+          resolve({ confirmed: false, timedOut: true })
         }
       }, 30000)
     })

@@ -134,6 +134,7 @@ DONE: [Clear summary of all changes made and results]
 The word DONE: must be at the very start of your final response.`
 
 export const DANGEROUS_PATTERNS: RegExp[] = [
+  // Unix / Linux
   /rm\s+-[rf]{1,3}\s+[/~]/i,
   /rm\s+--recursive.*--force/i,
   /sudo\s+rm/i,
@@ -143,10 +144,21 @@ export const DANGEROUS_PATTERNS: RegExp[] = [
   /\bhalt\b/i,
   /\bmkfs\b/i,
   /dd\s+if=.*of=\/dev/i,
+  // Git
   /git\s+push\s+.*--force/i,
   /git\s+reset\s+--hard\s+HEAD~\d+/i,
+  // SQL
   /DROP\s+(TABLE|DATABASE)/i,
   /TRUNCATE\s+TABLE/i,
+  // Windows cmd.exe
+  /rd\s+\/s\s+\/q/i,
+  /rmdir\s+\/s/i,
+  /del\s+.*\/[fFsS].*\/[qQ]/i,
+  /format\s+[A-Za-z]:/i,
+  // PowerShell
+  /Remove-Item\s+.*-Recurse\s+.*-Force/i,
+  /Remove-Item\s+.*-Force\s+.*-Recurse/i,
+  /Clear-Disk\b/i,
 ]
 
 export const PLAN_SYSTEM_PROMPT = `You are LocalCode in PLAN MODE. Your job is to think deeply and produce a clear, structured implementation plan — do NOT call any tools or execute anything.

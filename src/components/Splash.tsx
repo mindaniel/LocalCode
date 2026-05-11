@@ -28,6 +28,14 @@ const TIPS = [
   'Run shell commands directly: $ npm test  or  ! git status',
   'LM Studio: /config provider lmstudio  |  Ollama: /config provider ollama',
   'Try: fix auth bug  ·  analyze architecture  ·  add unit tests',
+  'Drag & drop a file into the terminal to attach it automatically',
+  'Type @filename to attach a file inline — e.g.  @src/app.ts explain this',
+  'Use /model to browse and switch models from the running server',
+  'Tab autocompletes commands or toggles BUILD ↔ PLAN mode',
+  '/compact summarizes long conversations to free up context window',
+  '/session save <name> to bookmark a conversation, /session load to resume',
+  '/doctor checks your LLM connection and shows current configuration',
+  'Plan before you build: tab to switch to PLAN mode, then describe the feature',
 ]
 
 function getSuggestion(input: string, history: string[]): string {
@@ -89,7 +97,7 @@ export const Splash: React.FC<Props> = ({ config, history, onSubmit }) => {
       {/* Logo */}
       {LOCAL_LINES.map((localLine, i) => (
         <Box key={i}>
-          <Text color="#4B5563">{localLine}</Text>
+          <Text color="#d8d8d8">{localLine}</Text>
           <Text color="#3B82F6">{CODE_LINES[i]}</Text>
         </Box>
       ))}
