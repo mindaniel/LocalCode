@@ -8,7 +8,8 @@
     "node": ">=18.0.0"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "logo.png"
   ],
   "bin": {
     "localcode": "dist/localcode.js",

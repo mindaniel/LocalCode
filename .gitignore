@@ -5,3 +5,4 @@ dist/
 .env.local
 .claude
 .claude/
+vscode-extension/
