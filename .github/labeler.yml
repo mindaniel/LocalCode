@@ -1,0 +1,55 @@
+"area:cli":
+  - 'src/bin/**'
+
+"area:agent":
+  - 'src/agent/**'
+
+"area:ui":
+  - 'src/components/**'
+  - 'src/app.tsx'
+  - 'src/**/*.tsx'
+
+"area:config":
+  - 'src/config/**'
+
+"area:discord":
+  - 'src/discord/**'
+
+"area:llm":
+  - 'src/llm/**'
+
+"area:lsp":
+  - 'src/lsp/**'
+
+"area:plugins":
+  - 'src/plugins/**'
+  - 'examples/plugins/**'
+
+"area:pty":
+  - 'src/pty/**'
+
+"area:security":
+  - 'src/security/**'
+
+"area:shared":
+  - 'src/shared/**'
+
+"area:extension":
+  - 'vscode-extension/**'
+
+"area:examples":
+  - 'examples/**'
+
+"area:docs":
+  - 'README.md'
+  - 'PLUGIN_DEV_GUIDE.md'
+
+"area:ci":
+  - '.github/**'
+
+"area:build":
+  - 'tsconfig.json'
+  - 'tsconfig.web.json'
+  - 'tsup.config.ts'
+  - 'package.json'
+  - 'package-lock.json'

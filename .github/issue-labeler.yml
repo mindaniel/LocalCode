@@ -1,0 +1,11 @@
+"type:bug":
+  - '\\b([Bb]ug|[Cc]rash|[Ee]rror|[Ee]xception|[Ff]ail|[Bb]roken)\\b'
+
+"type:feature":
+  - '\\b([Ff]eature|[Ee]nhancement|[Rr]equest|[Ii]dea)\\b'
+
+"type:docs":
+  - '\\b([Dd]oc|[Dd]ocs|[Dd]ocumentation|[Rr]eadme)\\b'
+
+"type:question":
+  - '\\b([Qq]uestion|[Hh]ow|[Hh]elp)\\b'

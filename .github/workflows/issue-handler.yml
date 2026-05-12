@@ -1,0 +1,48 @@
+name: Issue Handler
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  triage:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: github/issue-labeler@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          configuration-path: .github/issue-labeler.yml
+      - if: github.event.action == 'opened'
+        uses: peter-evans/assign-issue@v3
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          assignees: ${{ github.actor }}
+      - if: github.event.action == 'opened'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            Thanks for opening this issue! We will take a look soon.
+            Please add any extra details or logs that might help.
+
+  stale:
+    if: github.event_name != 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          days-before-stale: 30
+          days-before-close: 7
+          stale-issue-label: stale
+          stale-issue-message: 'This issue has been inactive for 30 days. If this is still relevant, please add a comment.'
+          close-issue-message: 'Closing due to inactivity. Feel free to reopen with more details.'
+          exempt-issue-labels: 'pinned,security'
