@@ -1,4 +1,5 @@
 import { ToolCall, ToolResult } from '../../shared/types'
+import { globalRegistry } from '../../plugins/registry.js'
 import { runShell } from './shell'
 import {
   readFileTool, writeFileTool, appendFileTool, editFileTool,
@@ -8,7 +9,6 @@ import {
 import { webFetchTool, httpRequestTool } from './network'
 import { lspCheckTool } from './lsp'
 import { gitBranchTool, gitStashTool, runTestsTool } from './git'
-import { PluginLoader } from '../../plugins/PluginLoader'
 
 export async function executeTool(toolCall: ToolCall, cwd: string): Promise<ToolResult> {
   const { tool, arguments: args } = toolCall
@@ -85,8 +85,11 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
         return lspCheckTool(String(args.path || '.'), cwd)
 
       default: {
-        const pluginTool = PluginLoader.getInstance().getTool(tool)
-        if (pluginTool) return pluginTool.handler(args, { cwd })
+        const regTool = globalRegistry.getTool(tool)
+        if (regTool) {
+          const output = await globalRegistry.executeTool(tool, args)
+          return { success: !output.startsWith('Error'), output }
+        }
         return { success: false, output: '', error: `Unknown tool: ${tool}` }
       }
     }

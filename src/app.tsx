@@ -20,7 +20,9 @@ import { LLMRouter } from './llm/LLMRouter'
 import { lspCheck } from './lsp/LspRunner'
 import { AgentMessage, ToolCall, ToolResult, Attachment } from './shared/types'
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from './shared/constants'
-import { PluginLoader } from './plugins/PluginLoader'
+import { installPlugin, removePlugin, listInstalledPlugins } from './plugins/installer.js'
+import { globalRegistry, globalCommandRegistry } from './plugins/registry.js'
+import { loadPlugins } from './plugins/loader.js'
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'])
 const SKIP_DIRS  = new Set(['node_modules', '.git', 'dist', '__pycache__', '.next', 'build', 'target'])
@@ -488,9 +490,7 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
   }, [])
 
   useEffect(() => {
-    const loader = PluginLoader.getInstance()
-    loader.load()
-    setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+    setPluginCmds(globalCommandRegistry.listCommands().map(c => ({ cmd: c.cmd, description: c.description })))
   }, [])
 
   const showInfo = useCallback((title: string, lines: string[]) => {
@@ -749,68 +749,69 @@ export const App: React.FC<AppProps> = ({ initialCommand, cwd, onStatusChange })
       const rest = input.slice(7).trim()
       const [sub, ...rest2] = rest.split(/\s+/)
       const arg = rest2.join(' ').trim()
-      const loader = PluginLoader.getInstance()
 
       if (!sub || sub === 'list') {
-        const plugins = loader.getAll()
-        const errors  = loader.getErrors()
+        const entries = await listInstalledPlugins(globalRegistry)
         const lines: string[] = ['**Plugins**', '']
-        if (plugins.length === 0 && errors.length === 0) {
-          lines.push(`  No plugins installed.`)
-          lines.push(`  Plugin dir: ${loader.getPluginDir()}`)
+        if (entries.length === 0) {
+          lines.push('  No plugins installed.')
           lines.push('')
-          lines.push('  /plugin install <path>   Install a plugin')
+          lines.push('  /plugin install <user/repo>   Install from GitHub')
+          lines.push('  /plugin install <path>        Install from local path')
         } else {
-          for (const p of plugins) {
-            const cmds  = (p.commands ?? []).map(c => c.cmd.trim()).join(', ')
-            const tools = (p.tools    ?? []).map(t => t.name).join(', ')
-            lines.push(`  • ${p.name}  v${p.version}${p.description ? '  ' + p.description : ''}`)
-            if (cmds)  lines.push(`    commands : ${cmds}`)
-            if (tools) lines.push(`    tools    : ${tools}`)
+          for (const e of entries) {
+            const status = e.loaded ? '✓' : '✗'
+            lines.push(`  ${status} ${e.name}  v${e.version}  by ${e.author}  — ${e.description}`)
+            if (e.tools.length > 0)    lines.push(`    tools    : ${e.tools.join(', ')}`)
+            if (e.commands.length > 0) lines.push(`    commands : ${e.commands.join(', ')}`)
           }
-          for (const e of errors) lines.push(`  ✗ ${e.file}: ${e.error}`)
         }
         showInfo('plugins', lines)
       } else if (sub === 'install') {
-        if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin install <path>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
+        if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin install <user/repo|url|path>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
         setAgentStatus('thinking')
-        const result = await loader.install(arg)
+        const result = await installPlugin(arg, globalRegistry, globalCommandRegistry)
         setAgentStatus('idle')
         if (result.ok) {
-          setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
-          addMsg({ type: 'done', content: `Plugin "${result.name}" installed successfully` })
+          setPluginCmds(globalCommandRegistry.listCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+          const detail = [
+            result.toolCount ? `${result.toolCount} tool(s)` : '',
+            result.commandCount ? `${result.commandCount} command(s)` : '',
+          ].filter(Boolean).join(', ')
+          addMsg({ type: 'done', content: `Plugin "${result.name}" installed${detail ? ` (${detail})` : ''}` })
         } else {
           addMsg({ type: 'error', content: `Install failed: ${result.error}` })
         }
       } else if (sub === 'remove') {
         if (!arg) { addMsg({ type: 'error', content: 'Usage: /plugin remove <name>' }); cm.addHistory(input); setHistory(cm.getHistory()); return }
         setAgentStatus('thinking')
-        const result = await loader.remove(arg)
+        const result = await removePlugin(arg, globalRegistry, globalCommandRegistry)
         setAgentStatus('idle')
         if (result.ok) {
-          setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+          setPluginCmds(globalCommandRegistry.listCommands().map(c => ({ cmd: c.cmd, description: c.description })))
           addMsg({ type: 'done', content: `Plugin "${arg}" removed` })
         } else {
-          addMsg({ type: 'error', content: result.error || 'Remove failed' })
+          addMsg({ type: 'error', content: result.error ?? 'Remove failed' })
         }
       } else if (sub === 'reload') {
-        loader.reload()
-        setPluginCmds(loader.getCommands().map(c => ({ cmd: c.cmd, description: c.description })))
-        addMsg({ type: 'done', content: `Plugins reloaded  (${loader.getAll().length} loaded)` })
+        globalRegistry.listTools()
+          .filter(t => t.pluginName !== undefined)
+          .forEach(t => globalRegistry.removeTool(t.name))
+        globalCommandRegistry.listCommands().forEach(c => globalCommandRegistry.removeCommand(c.cmd))
+        const results = await loadPlugins(globalRegistry, globalCommandRegistry)
+        const loaded = results.filter(r => r.success).length
+        setPluginCmds(globalCommandRegistry.listCommands().map(c => ({ cmd: c.cmd, description: c.description })))
+        addMsg({ type: 'done', content: `Plugins reloaded (${loaded} loaded)` })
       } else {
-        addMsg({ type: 'error', content: 'Usage: /plugin [list | install <path> | remove <name> | reload]' })
+        addMsg({ type: 'error', content: 'Usage: /plugin [list | install <source> | remove <name> | reload]' })
       }
       cm.addHistory(input); setHistory(cm.getHistory()); return
     }
 
     // ── Plugin slash-command routing ──────────────────────────────────────────
     if (input.startsWith('/')) {
-      const commands = PluginLoader.getInstance().getCommands()
-      const trimmed  = input.trim()
-      const matched  = commands.find(c => {
-        const key = c.cmd.trimEnd()
-        return trimmed === key || trimmed.startsWith(key + ' ')
-      })
+      const trimmed = input.trim()
+      const matched = globalCommandRegistry.getCommand(trimmed)
       if (matched) {
         const key  = matched.cmd.trimEnd()
         const args = trimmed.slice(key.length).trim()

@@ -10,7 +10,7 @@ import { executeTool } from './tools'
 import { ConfigManager } from '../config/ConfigManager'
 import { CommandGuard } from '../security/CommandGuard'
 import { AGENT_SYSTEM_PROMPT, PLAN_SYSTEM_PROMPT, MAX_AGENT_ITERATIONS } from '../shared/constants'
-import { PluginLoader } from '../plugins/PluginLoader'
+import { globalRegistry } from '../plugins/registry.js'
 
 // Short inputs that are clearly conversational — no tools needed
 const CONVERSATIONAL = /^(hi|hey|hello|sup|yo|hallo|hej|ciao|howdy|how are you|what can you do|what are you|who are you|thanks|thank you|danke|ok|okay|cool|nice|great|good|yes|no|nope|yep|sure|help me|what\??)[\s!?.]*$/i
@@ -122,9 +122,9 @@ export class AgentRuntime extends EventEmitter {
       return
     }
 
-    const pluginTools = PluginLoader.getInstance().getTools()
-    const pluginSection = pluginTools.length > 0
-      ? '\n\n### Plugin Tools\n' + pluginTools
+    const registryTools = globalRegistry.listTools()
+    const pluginSection = registryTools.length > 0
+      ? '\n\n### Plugin Tools\n' + registryTools
           .map(t => `- **${t.name}**: ${t.description}\n  {"tool": "${t.name}", "arguments": {}}`)
           .join('\n')
       : ''

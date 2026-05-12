@@ -5,6 +5,8 @@ import { App } from '../app'
 import { ConfigManager } from '../config/ConfigManager'
 import { discordPresence } from '../discord/DiscordPresence'
 import { getAppVersion } from '../shared/version'
+import { loadPlugins } from '../plugins/loader.js'
+import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 
 const args = process.argv.slice(2)
 const cwd = process.cwd()
@@ -92,6 +94,7 @@ process.on('SIGTERM', () => { exitAltScreen(); discordPresence.destroy(); proces
 process.on('uncaughtException', () => { exitAltScreen(); discordPresence.destroy(); process.exit(1) })
 
 enterAltScreen()
+loadPlugins(globalRegistry, globalCommandRegistry).catch(() => undefined)
 discordPresence.connect().then(() => discordPresence.update('idle', cwd))
 
 // ── Launch Ink app ─────────────────────────────────────────────────────────
