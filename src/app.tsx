@@ -21,6 +21,8 @@ import { lspCheck } from "./lsp/LspRunner";
 import { LspManager } from "./lsp/LspManager";
 import { AgentMessage, ToolCall, ToolResult, Attachment } from "./shared/types";
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from "./shared/constants";
+import { checkForUpdate, UpdateInfo } from "./shared/updateChecker";
+import { getAppVersion } from "./shared/version";
 import {
   installPlugin,
   removePlugin,
@@ -731,6 +733,7 @@ export const App: React.FC<AppProps> = ({
   } | null>(null);
   const [infoScroll, setInfoScroll] = useState(0);
   const [debugMode, setDebugMode] = useState<boolean>(() => cm.get().debugMode ?? false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
 
   const taskQueueRef = useRef<string[]>([]); // tasks queued while agent is running
   const crashCompactRef = useRef(false); // guard against compact-loop after crash
@@ -831,6 +834,13 @@ export const App: React.FC<AppProps> = ({
     return () => {
       ptyRef.current?.kill();
     };
+  }, []);
+
+  // Background update check — runs once on mount, non-blocking
+  useEffect(() => {
+    checkForUpdate(getAppVersion()).then((info) => {
+      if (info) setUpdateInfo(info);
+    });
   }, []);
 
   useEffect(() => {
@@ -2126,6 +2136,18 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <Box flexDirection="column" height={termRows}>
+      {/* ── Update banner (top-right, 1 line) ── */}
+      {updateInfo && (
+        <Box justifyContent="flex-end" flexShrink={0}>
+          <Text backgroundColor="#92400E" color="#FEF3C7" bold>
+            {" "}↑ Update available v{updateInfo.latestVersion}{" "}
+          </Text>
+          <Text color="#4B5563">  </Text>
+          <Text backgroundColor="#1D4ED8" color="#BFDBFE">
+            {" "}{updateInfo.updateCommand}{" "}
+          </Text>
+        </Box>
+      )}
       {showSplash ? (
         /* ── Splash: fills terminal, status bar at bottom ── */
         <>
@@ -2153,9 +2175,7 @@ export const App: React.FC<AppProps> = ({
       ) : (
         /* ── Chat view ── */
         <>
-          {/* Scrollable area — flexGrow takes all space above the fixed bottom UI.
-              overflow="hidden" ensures it never pushes input/StatusBar off screen. */}
-          <Box flexGrow={1} flexShrink={1} flexDirection="column" overflow="hidden">
+          {/* Spacer pushes chat content to the bottom of available space */}
           <Box flexGrow={1} flexShrink={1} />
 
           {infoPopup ? (
@@ -2391,8 +2411,6 @@ export const App: React.FC<AppProps> = ({
             </Box>
           )}
 
-          </Box>{/* end scrollable area */}
-
           {/* ── Connect Popup ── */}
           {connectPopup && (
             <ConnectPopup
@@ -2466,8 +2484,8 @@ export const App: React.FC<AppProps> = ({
 
           {/* ── Input box (hidden when info popup is open) ── */}
           {!infoPopup && (
-            <Box flexShrink={0}>
             <Box
+              flexShrink={0}
               flexDirection="column"
               borderStyle="single"
               borderColor={mode === "plan" ? "#14532D" : "#1E3A5F"}
@@ -2524,8 +2542,8 @@ export const App: React.FC<AppProps> = ({
               </Box>
 
               {/* Hint bar */}
-              <Box paddingX={1} justifyContent="space-between">
-                <Box>
+              <Box paddingX={1}>
+                <Box flexGrow={1}>
                   {isRunning ? (
                     <>
                       <Text color="#F59E0B">ctrl+c </Text>
@@ -2571,7 +2589,6 @@ export const App: React.FC<AppProps> = ({
                   </Text>
                 </Box>
               </Box>
-            </Box>
             </Box>
           )}
 
