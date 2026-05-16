@@ -1,6 +1,13 @@
 # Changelog
 
 <<<<<<< HEAD
+## [0.5.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.4.0...localcode-agent-v0.5.0) (2026-05-16)
+
+
+### Features
+
+* **lsp:** add hover and definition tools for LSP integration ([c0e3783](https://github.com/lsheasel/LocalCode/commit/c0e3783d11894bf7eb158612f40a0bffc352163e))
+
 ## [Unreleased]
 
 ### Features
