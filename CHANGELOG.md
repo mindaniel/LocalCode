@@ -1,6 +1,13 @@
 # Changelog
 
 <<<<<<< HEAD
+## [0.7.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.6.0...localcode-agent-v0.7.0) (2026-05-22)
+
+
+### Features
+
+* add attachment handling and utility functions ([bdecad0](https://github.com/lsheasel/LocalCode/commit/bdecad0fc395eb3fe609a980532bd35eb03c9f39))
+
 ## [0.6.0](https://github.com/lsheasel/LocalCode/compare/localcode-agent-v0.5.0...localcode-agent-v0.6.0) (2026-05-16)
 
 
