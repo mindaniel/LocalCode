@@ -1,110 +1,34 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import TextInput from "ink-text-input";
-import { readFile, readdir } from "fs/promises";
-import { existsSync } from "fs";
-import { resolve, extname, basename, join } from "path";
 import { Splash } from "./components/Splash";
 import { StatusBar } from "./components/StatusBar";
 import { ThinkingDots } from "./components/ThinkingDots";
 import { DiffView } from "./components/DiffView";
-import { MarkdownText } from "./components/MarkdownText";
 import { ConnectPopup } from "./components/ConnectPopup";
 import { ModelPicker } from "./components/ModelPicker";
 import { FilePicker } from "./components/FilePicker";
 import { InfoPopup } from "./components/InfoPopup";
-import { AgentRuntime, DiffPreview } from "./agent/AgentRuntime";
+import { UserBlock } from "./components/UserBlock";
+import { AgentBlock } from "./components/AgentBlock";
+import { AgentRuntime } from "./agent/AgentRuntime";
 import { ConfigManager } from "./config/ConfigManager";
 import { PtyManager } from "./pty/PtyManager";
-import { LLMRouter } from "./llm/LLMRouter";
-import { lspCheck } from "./lsp/LspRunner";
-import { LspManager } from "./lsp/LspManager";
-import { AgentMessage, ToolCall, ToolResult, Attachment } from "./shared/types";
-import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from "./shared/constants";
+import { AgentMessage, ToolCall, Attachment } from "./shared/types";
+import { BUILTIN_COMMANDS } from "./shared/constants";
 import { checkForUpdate, UpdateInfo } from "./shared/updateChecker";
 import { getAppVersion } from "./shared/version";
 import {
-  installPlugin,
-  removePlugin,
-  listInstalledPlugins,
-} from "./plugins/installer.js";
-import { globalRegistry, globalCommandRegistry } from "./plugins/registry.js";
-import { loadPlugins, reloadPlugin } from "./plugins/loader.js";
-
-const IMAGE_EXTS = new Set([
-  ".jpg",
-  ".jpeg",
-  ".png",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".svg",
-]);
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "__pycache__",
-  ".next",
-  "build",
-  "target",
-]);
-
-async function loadAttachment(
-  filePath: string,
-  cwd: string,
-): Promise<Attachment | null> {
-  const resolved = resolve(cwd, filePath);
-  if (!existsSync(resolved)) return null;
-  const name = basename(resolved);
-  const ext = extname(resolved).toLowerCase();
-  if (IMAGE_EXTS.has(ext)) {
-    const buf = await readFile(resolved);
-    const mime =
-      ext === ".png"
-        ? "image/png"
-        : ext === ".gif"
-          ? "image/gif"
-          : ext === ".webp"
-            ? "image/webp"
-            : "image/jpeg";
-    return {
-      path: resolved,
-      name,
-      type: "image",
-      data: buf.toString("base64"),
-      mimeType: mime,
-    };
-  }
-  const data = await readFile(resolved, "utf-8").catch(() => null);
-  if (data === null) return null;
-  return { path: resolved, name, type: "file", data };
-}
-
-async function listCwdFiles(cwd: string, maxDepth = 2): Promise<string[]> {
-  const results: string[] = [];
-  async function walk(dir: string, rel: string, depth: number) {
-    if (depth > maxDepth || results.length > 300) return;
-    let entries;
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (SKIP_DIRS.has(e.name)) continue;
-      const relPath = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        results.push(relPath + "/");
-        await walk(join(dir, e.name), relPath, depth + 1);
-      } else {
-        results.push(relPath);
-      }
-    }
-  }
-  await walk(cwd, "", 0);
-  return results;
-}
+  groupIntoTurns,
+  getVisibleTurns,
+  estimateTurnLines,
+  parseThinking,
+  getSuggestion,
+} from "./shared/utils";
+import { loadAttachment, listCwdFiles } from "./shared/attachments";
+import { globalCommandRegistry } from "./plugins/registry.js";
+import { loadPlugins } from "./plugins/loader.js";
+import { useSlashCommands } from "./hooks/useSlashCommands";
 
 let _id = 0;
 const nextId = () => String(++_id);
@@ -113,583 +37,13 @@ type AgentStatus = "idle" | "running" | "thinking" | "error";
 interface ConfirmRequest {
   toolCall: ToolCall;
   reason: string;
-  diffPreview?: DiffPreview;
+  diffPreview?: import("./agent/AgentRuntime").DiffPreview;
   dangerous?: boolean;
 }
 interface AppProps {
   initialCommand?: string;
   cwd: string;
   onStatusChange?: (status: string, cwd: string) => void;
-}
-
-// ── Turn grouping ─────────────────────────────────────────────────────────────
-type Turn =
-  | { type: "user"; content: string; timestamp: number }
-  | { type: "agent"; messages: AgentMessage[] };
-
-function groupIntoTurns(messages: AgentMessage[]): Turn[] {
-  const turns: Turn[] = [];
-  let agentMsgs: AgentMessage[] = [];
-
-  const flush = () => {
-    if (agentMsgs.length > 0) {
-      turns.push({ type: "agent", messages: agentMsgs });
-      agentMsgs = [];
-    }
-  };
-
-  for (const msg of messages) {
-    if (msg.type === "text" && msg.content.startsWith("> ")) {
-      flush();
-      turns.push({
-        type: "user",
-        content: msg.content.slice(2),
-        timestamp: msg.timestamp,
-      });
-    } else {
-      agentMsgs.push(msg);
-    }
-  }
-  flush();
-  return turns;
-}
-
-// ── Line-height estimation ────────────────────────────────────────────────────
-function countLines(text: string, width: number): number {
-  return text
-    .split("\n")
-    .reduce(
-      (s, l) =>
-        s + Math.max(1, Math.ceil((l.length || 1) / Math.max(1, width))),
-      0,
-    );
-}
-
-function estimateTurnLines(turn: Turn, innerWidth: number): number {
-  if (turn.type === "user") return 4; // box border + content + timestamp + margin
-
-  let lines = 0;
-  for (const msg of turn.messages) {
-    if (msg.type === "error") {
-      lines += countLines(msg.content, innerWidth);
-    } else if (msg.type === "command") {
-      lines += msg.content.split("\n").length + (msg.commandTitle ? 1 : 0) + 2;
-    } else if (msg.type === "text") {
-      lines += countLines(msg.content, innerWidth);
-    } else if (msg.type === "done" && msg.content) {
-      lines += countLines(
-        msg.content.replace(/^DONE:\s*/i, "").trim(),
-        innerWidth,
-      );
-    } else if (
-      msg.type === "tool_result" &&
-      msg.toolCall?.tool === "edit_file" &&
-      msg.toolResult?.meta
-    ) {
-      const m = msg.toolResult.meta;
-      lines +=
-        (m.diffContextBefore?.length ?? 0) +
-        (m.diffOld?.length ?? 0) +
-        (m.diffNew?.length ?? 0) +
-        (m.diffContextAfter?.length ?? 0) +
-        4;
-    } else {
-      lines += 1;
-    }
-  }
-  return Math.max(2, lines + 2); // +1 footer, +1 margin
-}
-
-function getVisibleTurns(
-  turns: Turn[],
-  availRows: number,
-  innerWidth: number,
-  scrollOffset: number,
-): { visible: Turn[]; hiddenAbove: number; hiddenBelow: number } {
-  const result: Turn[] = [];
-  let used = 0;
-  const endIdx = Math.max(0, turns.length - scrollOffset);
-  const hiddenBelow = turns.length - endIdx;
-
-  for (let i = endIdx - 1; i >= 0; i--) {
-    const h = estimateTurnLines(turns[i], innerWidth);
-    if (used + h > availRows) {
-      // Always show at least the most recent turn — even if it's taller than
-      // the available space (Ink will render it and scroll the terminal buffer).
-      if (result.length === 0) {
-        result.unshift(turns[i]);
-        return { visible: result, hiddenAbove: i, hiddenBelow };
-      }
-      return { visible: result, hiddenAbove: i + 1, hiddenBelow };
-    }
-    result.unshift(turns[i]);
-    used += h;
-  }
-  return { visible: result, hiddenAbove: 0, hiddenBelow };
-}
-
-function fmtTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-// ── User message block ────────────────────────────────────────────────────────
-const UserBlock: React.FC<{ content: string; timestamp: number }> = ({
-  content,
-  timestamp,
-}) => (
-  <Box
-    flexDirection="column"
-    marginBottom={1}
-    marginX={1}
-    borderStyle="single"
-    borderColor="#1D4ED8"
-  >
-    <Box paddingX={1}>
-      <Text color="#3B82F6" bold>
-        #{" "}
-      </Text>
-      <Text color="#E5E7EB" bold>
-        {content}
-      </Text>
-    </Box>
-    <Box paddingX={1}>
-      <Text color="#374151">{fmtTime(timestamp)}</Text>
-    </Box>
-  </Box>
-);
-
-// ── Single message row (inside agent block) ───────────────────────────────────
-const MsgRow: React.FC<{ msg: AgentMessage; maxLines?: number }> = ({
-  msg,
-  maxLines,
-}) => {
-  switch (msg.type) {
-    case "thinking": {
-      const allText = msg.content.trim().replace(/\s+/g, " ");
-      if (!allText) return null;
-      return (
-        <Text color="#4B5563" dimColor italic wrap="truncate-start">
-          {allText}
-        </Text>
-      );
-    }
-    case "text":
-      return <MarkdownText content={msg.content} />;
-    case "command": {
-      const lines = msg.content.split("\n");
-      return (
-        <Box flexDirection="column" marginBottom={1} paddingLeft={2}>
-          {msg.commandTitle && (
-            <Box marginBottom={0}>
-              <Text color="#6B7280">┌─ </Text>
-              <Text color="#9CA3AF" bold>
-                {msg.commandTitle}
-              </Text>
-            </Box>
-          )}
-          <Box
-            flexDirection="column"
-            borderStyle="single"
-            borderColor="#374151"
-            paddingX={1}
-          >
-            {lines.map((line, i) => {
-              if (
-                line.startsWith("  /") ||
-                line.startsWith("  $") ||
-                line.startsWith("  !")
-              ) {
-                const spaceIdx = line.search(/\s{2,}/);
-                const cmd = spaceIdx > 0 ? line.slice(0, spaceIdx) : line;
-                const desc = spaceIdx > 0 ? line.slice(spaceIdx).trim() : "";
-                return (
-                  <Box key={i}>
-                    <Text color="#3B82F6">{cmd}</Text>
-                    {desc ? <Text color="#6B7280"> {desc}</Text> : null}
-                  </Box>
-                );
-              }
-              if (line.startsWith("**") && line.endsWith("**")) {
-                return (
-                  <Text key={i} color="#9CA3AF" bold>
-                    {line.replace(/\*\*/g, "")}
-                  </Text>
-                );
-              }
-              if (line === "") return <Text key={i}> </Text>;
-              const isKv = /^\s{2}\S.*\s:\s/.test(line);
-              if (isKv) {
-                const colonIdx = line.indexOf(" : ");
-                const key = line.slice(0, colonIdx);
-                const val = line.slice(colonIdx + 3);
-                return (
-                  <Box key={i}>
-                    <Text color="#6B7280">{key} </Text>
-                    <Text color="#374151">: </Text>
-                    <Text color="#E5E7EB">{val}</Text>
-                  </Box>
-                );
-              }
-              return (
-                <Text key={i} color="#9CA3AF">
-                  {line}
-                </Text>
-              );
-            })}
-          </Box>
-        </Box>
-      );
-    }
-    case "tool_call": {
-      if (!msg.toolCall) return null;
-      const a = msg.toolCall.arguments;
-      const cols = process.stdout.columns || 80;
-      const maxPath = Math.max(20, cols - 20);
-      const tp = (s: unknown) => {
-        const str = String(s || "");
-        return str.length > maxPath ? "…" + str.slice(-(maxPath - 1)) : str;
-      };
-      const label = (() => {
-        switch (msg.toolCall.tool) {
-          case "run_shell":
-            return `$ ${String(a.command || "").slice(0, cols - 10)}`;
-          case "read_file":
-            return `Read  ${tp(a.path)}`;
-          case "write_file":
-            return `Write  ${tp(a.path)}`;
-          case "append_file":
-            return `Append  ${tp(a.path)}`;
-          case "edit_file":
-            return null;
-          case "delete_file":
-            return `Delete  ${tp(a.path)}`;
-          case "move_file":
-            return `Move  ${tp(a.from)}  →  ${tp(a.to)}`;
-          case "copy_file":
-            return `Copy  ${tp(a.from)}  →  ${tp(a.to)}`;
-          case "create_dir":
-            return `mkdir  ${tp(a.path)}`;
-          case "list_files":
-            return `ls  ${tp(a.path || ".")}`;
-          case "find_files":
-            return `find  ${tp(a.pattern)}`;
-          case "search_files":
-            return `grep  "${tp(a.pattern)}"`;
-          case "git_status":
-            return "git status";
-          case "git_diff":
-            return "git diff";
-          case "git_log":
-            return "git log";
-          case "git_commit":
-            return `git commit  "${String(a.message || "").slice(0, 40)}"`;
-          case "git_branch":
-            return `git branch  ${String(a.action || "list")}${a.name ? `  ${tp(a.name)}` : ""}`;
-          case "git_stash":
-            return `git stash  ${String(a.action || "push")}${a.message ? `  "${String(a.message).slice(0, 30)}"` : ""}`;
-          case "run_tests":
-            return "run tests";
-          case "web_fetch":
-            return `fetch  ${tp(a.url)}`;
-          case "http_request":
-            return `${a.method || "GET"}  ${tp(a.url)}`;
-          case "lsp_check":
-            return `lsp  ${tp(a.path || ".")}`;
-          case "lsp_hover":
-            return `hover  ${tp(a.path)}:${a.line}:${a.col}`;
-          case "lsp_definition":
-            return `def  ${tp(a.path)}:${a.line}:${a.col}`;
-          default:
-            return msg.toolCall.tool;
-        }
-      })();
-      if (!label) return null;
-      return (
-        <Box flexDirection="row" paddingLeft={1}>
-          <Text color="#374151"> </Text>
-          <Text color="#6B7280" wrap="truncate-end">
-            {label}
-          </Text>
-        </Box>
-      );
-    }
-    case "tool_result": {
-      if (!msg.toolCall) return null;
-      // Suppress inline result for tools that render as DiffView
-      if (msg.toolCall.tool === "edit_file") return null;
-      if (msg.toolCall.tool === "write_file" && msg.toolResult?.meta?.diffPath) return null;
-      if (!msg.toolResult?.success) {
-        const errText = (msg.toolResult?.error || "error").split("\n")[0];
-        return (
-          <Box flexDirection="row" paddingLeft={1}>
-            <Text color="#EF4444" wrap="truncate-end">
-              {" "}
-              ✗ {errText}
-            </Text>
-          </Box>
-        );
-      }
-      const outLines = (msg.toolResult.output || "")
-        .split("\n")
-        .filter(Boolean);
-      // skip trivial single-line outputs that are just the path echoed back
-      const summary =
-        outLines.length > 1
-          ? `${outLines.length} lines`
-          : (outLines[0] || "").slice(0, 60);
-      if (!summary) return null;
-      return (
-        <Box flexDirection="row" paddingLeft={1}>
-          <Text color="#374151"> </Text>
-          <Text color="#4B5563" wrap="truncate-end">
-            {summary}
-          </Text>
-        </Box>
-      );
-    }
-    case "error":
-      return (
-        <Text color="#EF4444" wrap="wrap">
-          {" "}
-          ✗ {msg.content}
-        </Text>
-      );
-    case "done": {
-      const { thinking: doneThinking, response: doneResponse } = parseThinking(
-        msg.content,
-      );
-      let clean = doneResponse
-        .replace(/```json[\s\S]*?```/gi, "")
-        .replace(/\{[\s\S]*?"tool"\s*:[\s\S]*?\}/g, "")
-        .replace(/\s*DONE:\s*<[^>]*>/gi, "")
-        .replace(/(?:^|\n)DONE:\s*/gi, "\n")
-        .trim();
-      if (!clean && !doneThinking) return null;
-      const thinkLines = doneThinking
-        ? doneThinking
-            .trim()
-            .split("\n")
-            .filter((l) => l.trim())
-        : [];
-      if (maxLines) {
-        const allLines = clean.split("\n");
-        if (allLines.length > maxLines) {
-          const hidden = allLines.length - maxLines;
-          clean = allLines.slice(-maxLines).join("\n");
-          const thinkOneLineM = thinkLines.join(" ");
-          return (
-            <Box flexDirection="column">
-              {thinkOneLineM ? (
-                <Text color="#4B5563" dimColor italic wrap="truncate-start">
-                  {thinkOneLineM}
-                </Text>
-              ) : null}
-              <Text color="#4B5563">
-                {" "}
-                ↑ {hidden} more lines above (scroll up to read)…
-              </Text>
-              <MarkdownText content={clean} />
-            </Box>
-          );
-        }
-      }
-      const thinkOneLine = thinkLines.join(" ");
-      return (
-        <Box flexDirection="column">
-          {thinkOneLine ? (
-            <Text color="#4B5563" dimColor italic wrap="truncate-start">
-              {thinkOneLine}
-            </Text>
-          ) : null}
-          {clean ? <MarkdownText content={clean} /> : null}
-        </Box>
-      );
-    }
-    default:
-      return null;
-  }
-};
-
-// ── Agent turn block (blue left bar, splits on DiffViews) ─────────────────────
-const AgentBlock: React.FC<{
-  messages: AgentMessage[];
-  model: string;
-  maxLines?: number;
-}> = ({ messages, model, maxLines }) => {
-  type Section =
-    | { type: "content"; msgs: AgentMessage[] }
-    | { type: "diff"; msg: AgentMessage };
-  const sections: Section[] = [];
-  let buf: AgentMessage[] = [];
-
-  const flushBuf = () => {
-    if (buf.length) {
-      sections.push({ type: "content", msgs: buf });
-      buf = [];
-    }
-  };
-
-  for (const msg of messages) {
-    if (
-      msg.type === "tool_result" &&
-      (msg.toolCall?.tool === "edit_file" || msg.toolCall?.tool === "write_file") &&
-      msg.toolResult?.meta?.diffPath
-    ) {
-      flushBuf();
-      sections.push({ type: "diff", msg });
-    } else {
-      buf.push(msg);
-    }
-  }
-  flushBuf();
-
-  const doneMsg = messages.find((m) => m.type === "done");
-  const ts = doneMsg?.timestamp ?? messages[messages.length - 1]?.timestamp;
-
-  const hasContent = messages.some(
-    (m) =>
-      (m.type === "text" && m.content && !m.content.startsWith("> ")) ||
-      m.type === "error" ||
-      (m.type === "done" && m.content) ||
-      (m.type === "tool_result" && (m.toolCall?.tool === "edit_file" || m.toolCall?.tool === "write_file")),
-  );
-
-  return (
-    <Box flexDirection="column" marginBottom={1}>
-      {sections.map((sec, i) => {
-        if (sec.type === "diff") {
-          const m = sec.msg.toolResult!.meta!;
-          return (
-            <DiffView
-              key={i}
-              filePath={m.diffPath!}
-              oldLines={m.diffOld!}
-              newLines={m.diffNew!}
-              startLine={m.diffStartLine!}
-              contextBefore={m.diffContextBefore ?? []}
-              contextAfter={m.diffContextAfter ?? []}
-              isNew={m.diffIsNew}
-            />
-          );
-        }
-        const isLast = i === sections.length - 1;
-        return (
-          <Box key={i}>
-            <Text color="#3B82F6"> │ </Text>
-            <Box flexDirection="column" flexGrow={1}>
-              {sec.msgs.map((msg, mi) => (
-                <MsgRow
-                  key={msg.id}
-                  msg={msg}
-                  maxLines={
-                    isLast && mi === sec.msgs.length - 1 ? maxLines : undefined
-                  }
-                />
-              ))}
-              {isLast && hasContent && ts && (
-                <Box marginTop={0}>
-                  <Text color="#374151">{model}</Text>
-                  <Text color="#1D4ED8"> </Text>
-                  <Text color="#374151">({fmtTime(ts)})</Text>
-                  {(() => {
-                    const doneMsg = messages.find((m) => m.type === "done");
-                    const parts: string[] = [];
-                    if (doneMsg?.durationMs) {
-                      const s = (doneMsg.durationMs / 1000).toFixed(1);
-                      parts.push(`${s}s`);
-                    }
-                    if (doneMsg?.tokenCount) {
-                      parts.push(`${doneMsg.tokenCount} tok`);
-                    }
-                    return parts.length > 0 ? (
-                      <Text color="#374151"> {parts.join("  ")}</Text>
-                    ) : null;
-                  })()}
-                </Box>
-              )}
-            </Box>
-          </Box>
-        );
-      })}
-    </Box>
-  );
-};
-
-// ── Thinking tag parser ───────────────────────────────────────────────────────
-function parseThinking(tokens: string): {
-  thinking: string;
-  response: string;
-  stillThinking: boolean;
-} {
-  // Try matching with explicit opening tag first (<thinking> or <think>)
-  let openTag = "<thinking>";
-  let closeTag = "</thinking>";
-  let start = tokens.indexOf(openTag);
-
-  if (start === -1) {
-    openTag = "<think>";
-    closeTag = "</think>";
-    start = tokens.indexOf(openTag);
-  }
-
-  if (start !== -1) {
-    const end = tokens.indexOf(closeTag, start);
-    if (end === -1) {
-      return {
-        thinking: tokens.slice(start + openTag.length),
-        response: "",
-        stillThinking: true,
-      };
-    }
-    return {
-      thinking: tokens.slice(start + openTag.length, end),
-      response: tokens.slice(end + closeTag.length).trimStart(),
-      stillThinking: false,
-    };
-  }
-
-  // Some providers (e.g. Ollama) strip the opening <think> tag but keep </think>.
-  // In that case, everything before </think> is thinking content.
-  const closeThinking = tokens.indexOf("</thinking>");
-  const closeThink = tokens.indexOf("</think>");
-
-  if (closeThinking !== -1) {
-    return {
-      thinking: tokens.slice(0, closeThinking),
-      response: tokens.slice(closeThinking + "</thinking>".length).trimStart(),
-      stillThinking: false,
-    };
-  }
-  if (closeThink !== -1) {
-    return {
-      thinking: tokens.slice(0, closeThink),
-      response: tokens.slice(closeThink + "</think>".length).trimStart(),
-      stillThinking: false,
-    };
-  }
-
-  // No tags at all — if there's no response-like content yet, assume still thinking.
-  // Heuristic: if tokens don't start with a typical response pattern, treat as thinking.
-  return { thinking: "", response: tokens, stillThinking: false };
-}
-
-// ── Autocomplete ──────────────────────────────────────────────────────────────
-function getSuggestion(input: string, history: string[]): string {
-  if (input.length < 2) return "";
-  const h = history.find(
-    (s) => s !== input && s.toLowerCase().startsWith(input.toLowerCase()),
-  );
-  if (h) return h.slice(input.length);
-  const c = BUILTIN_COMMANDS.find(
-    (b) => b.cmd.startsWith(input) && b.cmd !== input,
-  );
-  if (c) return c.cmd.slice(input.length);
-  const a = COMMAND_SUGGESTIONS.find((s) => s.startsWith(input) && s !== input);
-  if (a) return a.slice(input.length);
-  return "";
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -711,8 +65,8 @@ export const App: React.FC<AppProps> = ({
   const [inputKey, setInputKey] = useState(0);
   const [histIndex, setHistIndex] = useState(-1);
   const [pickerIdx, setPickerIdx] = useState(0);
-  const [scrollOffset, setScrollOffset] = useState(0); // turns vom Ende überspringen
 
+  const [scrollOffset, setScrollOffset] = useState(0);
   const [connectPopup, setConnectPopup] = useState(false);
   const [modelPicker, setModelPicker] = useState(false);
   const [modelList, setModelList] = useState<string[]>([]);
@@ -720,7 +74,9 @@ export const App: React.FC<AppProps> = ({
   const [filePicker, setFilePicker] = useState(false);
   const [fileList, setFileList] = useState<string[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [mode, setMode] = useState<"build" | "plan">("build");
+  const [mode, setMode] = useState<"build" | "plan" | "debug">(() =>
+    cm.get().debugMode ? "debug" : "build"
+  );
   const [pluginCmds, setPluginCmds] = useState<
     Array<{ cmd: string; description: string }>
   >([]);
@@ -732,30 +88,38 @@ export const App: React.FC<AppProps> = ({
     content: string;
   } | null>(null);
   const [infoScroll, setInfoScroll] = useState(0);
-  const [debugMode, setDebugMode] = useState<boolean>(() => cm.get().debugMode ?? false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [expandedResults, setExpandedResults] = useState<Set<string>>(new Set());
+  const [expandedThinking, setExpandedThinking] = useState<Set<string>>(new Set());
+  const [browseMode, setBrowseMode] = useState(false);
+  const [focusedToolIdx, setFocusedToolIdx] = useState(0);
 
-  const taskQueueRef = useRef<string[]>([]); // tasks queued while agent is running
-  const crashCompactRef = useRef(false); // guard against compact-loop after crash
+  const toolResultMsgIds = messages
+    .filter(
+      (m) =>
+        m.type === "tool_result" &&
+        m.toolCall?.tool !== "edit_file" &&
+        !(m.toolCall?.tool === "write_file" && m.toolResult?.meta?.diffPath),
+    )
+    .map((m) => m.id);
+  const focusedToolId = browseMode ? (toolResultMsgIds[focusedToolIdx] ?? null) : null;
+
+  const taskQueueRef = useRef<string[]>([]);
+  const crashCompactRef = useRef(false);
   const agentRef = useRef<AgentRuntime | null>(null);
   const ptyRef = useRef<PtyManager | null>(null);
   const hiddenAboveRef = useRef(0);
   const toolMsgsRef = useRef<import("./shared/types").Message[]>([]);
-  // Token buffering: accumulate in a ref, flush to state at most every 100 ms
-  // so the terminal doesn't repaint on every single token (ruins text selection).
   const tokenBufRef = useRef("");
   const tokenCntRef = useRef(0);
   const tokenFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True from first token until </think> is seen — used to show content as thinking even
-  // when the provider strips the opening <think> tag.
   const streamInThinkingRef = useRef(false);
   const agentStartTimeRef = useRef(0);
 
   const [termRows, setTermRows] = useState(process.stdout.rows || 24);
   const [termCols, setTermCols] = useState(process.stdout.columns || 80);
 
-  // Stable ref that holds the latest state values — lets handleSubmit (useCallback)
-  // always read fresh values without changing its identity every render.
+  // Stable ref that holds the latest state values
   const s = useRef({
     agentStatus,
     isRunning: false,
@@ -764,7 +128,7 @@ export const App: React.FC<AppProps> = ({
     pickerIdx,
     messages,
     convHistory,
-    debugMode,
+    debugMode: mode === "debug",
   });
   s.current = {
     agentStatus,
@@ -774,8 +138,13 @@ export const App: React.FC<AppProps> = ({
     pickerIdx,
     messages,
     convHistory,
-    debugMode,
+    debugMode: mode === "debug",
   };
+
+  const totalTokens =
+    messages
+      .filter((m) => m.type === "done" && m.tokenCount)
+      .reduce((sum, m) => sum + (m.tokenCount ?? 0), 0) + tokenCount;
 
   const showSplash =
     messages.length === 0 &&
@@ -844,13 +213,6 @@ export const App: React.FC<AppProps> = ({
   }, []);
 
   useEffect(() => {
-    if (initialCommand) {
-      const t = setTimeout(() => handleSubmit(initialCommand), 150);
-      return () => clearTimeout(t);
-    }
-  }, []);
-
-  useEffect(() => {
     setPluginCmds(
       globalCommandRegistry
         .listCommands()
@@ -868,19 +230,16 @@ export const App: React.FC<AppProps> = ({
       ...prev,
       { ...msg, id: nextId(), timestamp: Date.now() },
     ]);
-    setScrollOffset(0); // auto-scroll nach unten
+    setScrollOffset(0);
   }, []);
 
   const handleInputChange = useCallback(
     (v: string) => {
-      // Drag-and-drop detection: terminals paste the file path when a file is dropped.
-      // Strip surrounding quotes that some terminals add (Windows Terminal, PowerShell).
       const trimmed = v.trim().replace(/^["']|["']$/g, "");
       const isWindowsPath = /^[A-Za-z]:[\\\/].{2,}/.test(trimmed);
       const isUnixPath = /^\/[^\s\/]+\/[^\s]*/.test(trimmed);
 
       if (isWindowsPath || isUnixPath) {
-        // Clear input immediately so the raw path doesn't flash on screen
         setInputValue("");
         setHistIndex(-1);
         setPickerIdx(0);
@@ -888,11 +247,25 @@ export const App: React.FC<AppProps> = ({
           if (att) {
             setAttachments((prev) => [...prev, att]);
           } else {
-            // Not a readable file — restore the typed value so user can edit it
             setInputValue(v);
           }
         });
         return;
+      }
+
+      // @ triggers the file picker
+      const atMatch = v.match(/(^| )@(\S*)$/)
+      if (atMatch) {
+        const query = atMatch[2].toLowerCase()
+        listCwdFiles(cwd).then((files) => {
+          const filtered = query
+            ? files.filter((f) => f.toLowerCase().includes(query))
+            : files
+          setFileList(filtered.slice(0, 200))
+          setFilePicker(true)
+          setInputValue(v.slice(0, v.lastIndexOf('@')))
+        })
+        return
       }
 
       setInputValue(v);
@@ -902,1028 +275,50 @@ export const App: React.FC<AppProps> = ({
     [cwd],
   );
 
-  const handleSubmit = useCallback(
-    async (rawInput: string) => {
-      // Always read fresh state from the ref — the useCallback dep array is intentionally
-      // minimal so the function identity stays stable across renders.
-      const { agentStatus, isRunning, attachments, mode, messages } = s.current;
+  const { handleSubmit } = useSlashCommands({
+    cwd,
+    exit,
+    addMsg,
+    showInfo,
+    setInputValue,
+    setHistIndex,
+    setPickerIdx,
+    setAgentStatus,
+    setCurrentTokens,
+    setTokenCount,
+    setHistory,
+    setMessages,
+    setConvHistory,
+    setAttachments,
+    setMode,
+    setConnectPopup,
+    setModelPicker,
+    setModelLoading,
+    setModelList,
+    setFilePicker,
+    setFileList,
+    setConfirm,
+    setPluginCmds,
+    setInfoScroll,
+    s,
+    agentRef,
+    ptyRef,
+    taskQueueRef,
+    crashCompactRef,
+    tokenBufRef,
+    tokenCntRef,
+    tokenFlushRef,
+    toolMsgsRef,
+    streamInThinkingRef,
+    agentStartTimeRef,
+  });
 
-      const input = rawInput.trim();
-      if (!input) return;
-      setInputValue("");
-      setHistIndex(-1);
-      setPickerIdx(0);
-
-      // ── /debug toggle ─────────────────────────────────────────────────────────
-      if (input === "/debug") {
-        const newDebug = !s.current.debugMode;
-        setDebugMode(newDebug);
-        cm.set({ debugMode: newDebug });
-        addMsg({
-          type: "done",
-          content: newDebug
-            ? "Debug mode ON — full tool args, trust decisions, and raw errors are shown."
-            : "Debug mode OFF",
-        });
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── /config slash command ──────────────────────────────────────────────────
-      if (input.startsWith("/config") || input.toLowerCase() === "/config") {
-        const rest = input.slice(7).trim();
-        const [sub, ...rest2] = rest.split(/\s+/);
-        const val = rest2.join(" ").trim();
-
-        if (!sub) {
-          const cfg = cm.get();
-          showInfo("config", [
-            `  config path : ${cm.getConfigPath()}`,
-            "",
-            `  provider    : ${cfg.llm.provider}`,
-            `  model       : ${cfg.llm.model}`,
-            `  url         : ${cfg.llm.baseURL || "(default)"}`,
-            `  temperature : ${cfg.llm.temperature ?? 0.1}`,
-            "",
-            "**Commands**",
-            "  /config provider ollama      Use Ollama  (localhost:11434)",
-            "  /config provider lmstudio    Use LM Studio  (localhost:1234)",
-            "  /config model <name>         Switch model",
-            "  /config url <url>            Override base URL",
-            "  /config temperature <val>    Set temperature  (0.0–1.0)",
-          ]);
-        } else {
-          switch (sub.toLowerCase()) {
-            case "model":
-              if (!val) {
-                addMsg({
-                  type: "error",
-                  content: "Usage: /config model <model-name>",
-                });
-                break;
-              }
-              cm.setLLM({ model: val });
-              addMsg({ type: "done", content: `Model → ${val}` });
-              break;
-            case "provider": {
-              if (!val || !["ollama", "lmstudio"].includes(val.toLowerCase())) {
-                addMsg({
-                  type: "error",
-                  content:
-                    "Available providers: ollama  lmstudio\n  /config provider ollama\n  /config provider lmstudio",
-                });
-                break;
-              }
-              const defaults =
-                val === "lmstudio"
-                  ? {
-                      provider: "lmstudio" as any,
-                      baseURL: "http://localhost:1234/v1",
-                      model: cm.get().llm.model,
-                    }
-                  : {
-                      provider: "ollama" as any,
-                      baseURL: "http://localhost:11434",
-                      model: cm.get().llm.model,
-                    };
-              cm.setLLM(defaults);
-              addMsg({
-                type: "done",
-                content: `Provider → ${val}\nURL → ${defaults.baseURL}`,
-              });
-              break;
-            }
-            case "url":
-            case "baseurl":
-            case "base-url":
-              if (!val) {
-                addMsg({ type: "error", content: "Usage: /config url <url>" });
-                break;
-              }
-              cm.setLLM({ baseURL: val });
-              addMsg({ type: "done", content: `Base URL → ${val}` });
-              break;
-            case "temperature":
-            case "temp":
-              if (!val) {
-                addMsg({
-                  type: "error",
-                  content: "Usage: /config temperature <0.0–1.0>",
-                });
-                break;
-              }
-              cm.setLLM({ temperature: parseFloat(val) });
-              addMsg({ type: "done", content: `Temperature → ${val}` });
-              break;
-            default:
-              addMsg({
-                type: "error",
-                content: `Unknown subcommand. Type /config for an overview.`,
-              });
-          }
-        }
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── exit / clear (also without slash) ────────────────────────────────────
-      if (input === "/exit" || input === "exit" || input === "quit") {
-        exit();
-        return;
-      }
-      if (input === "/clear" || input === "clear") {
-        setMessages([]);
-        setConvHistory([]);
-        setInfoPopup(null);
-        return;
-      }
-
-      // ── /trust ────────────────────────────────────────────────────────────────
-      if (input === "/trust" || input.startsWith("/trust ")) {
-        const rest = input.slice(6).trim();
-        const [sub, ...r2] = rest.split(/\s+/);
-        const arg = r2.join(" ").trim() || sub;
-
-        if (!sub || sub === "list") {
-          const list = cm.listTrusted();
-          showInfo(
-            "trusted paths",
-            list.length
-              ? [
-                  "**Trusted paths** (write ops auto-approved)",
-                  "",
-                  ...list.map((p) => `  • ${p}`),
-                  "",
-                  "  /trust remove <path>   Remove trust",
-                ]
-              : [
-                  "  No trusted paths yet.",
-                  "",
-                  "  /trust <path>   Trust a folder",
-                  "  /trust .         Trust current working directory",
-                ],
-          );
-        } else if (sub === "remove") {
-          if (!arg || arg === "remove") {
-            addMsg({ type: "error", content: "Usage: /trust remove <path>" });
-            return;
-          }
-          const { resolve: nodeResolve } = await import("path");
-          cm.untrustPath(nodeResolve(cwd, arg));
-          addMsg({ type: "done", content: `Removed trust: ${arg}` });
-        } else {
-          const { resolve: nodeResolve } = await import("path");
-          const abs = nodeResolve(cwd, sub);
-          cm.trustPath(abs);
-          addMsg({
-            type: "done",
-            content: `Trusted: ${abs}\nAll write operations in this folder and subfolders will be auto-approved.`,
-          });
-        }
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── /lsp ──────────────────────────────────────────────────────────────────
-      if (input === "/lsp" || input.startsWith("/lsp ")) {
-        const targetArg = input.slice(4).trim() || ".";
-        setAgentStatus("thinking");
-        setCurrentTokens("");
-        const { diagnostics, tool, error } = await lspCheck(
-          cwd,
-          targetArg === "." ? undefined : targetArg,
-        );
-        setAgentStatus("idle");
-        setCurrentTokens("");
-        if (error && diagnostics.length === 0) {
-          addMsg({ type: "error", content: error });
-        } else if (diagnostics.length === 0) {
-          addMsg({
-            type: "command",
-            commandTitle: `lsp (${tool})`,
-            content: "  ✓ No issues found",
-          });
-        } else {
-          const errors = diagnostics.filter(
-            (d) => d.severity === "error",
-          ).length;
-          const warnings = diagnostics.filter(
-            (d) => d.severity === "warning",
-          ).length;
-          const lines = [
-            `  ${tool}: ${errors} error${errors !== 1 ? "s" : ""}, ${warnings} warning${warnings !== 1 ? "s" : ""}`,
-            "",
-            ...diagnostics
-              .slice(0, 40)
-              .map(
-                (d) =>
-                  `  ${d.file}:${d.line}:${d.col}  ${d.severity}  ${d.message}${d.code ? `  [${d.code}]` : ""}`,
-              ),
-            ...(diagnostics.length > 40
-              ? [`  … and ${diagnostics.length - 40} more`]
-              : []),
-          ];
-          addMsg({
-            type: "command",
-            commandTitle: `lsp (${tool})`,
-            content: lines.join("\n"),
-          });
-        }
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── /lsp hover / /lsp def ─────────────────────────────────────────────────
-      if (input.startsWith("/lsp hover ") || input.startsWith("/lsp def ")) {
-        const isHover = input.startsWith("/lsp hover ")
-        const rest = isHover ? input.slice(11).trim() : input.slice(9).trim()
-        // expect: path:line:col
-        const m = rest.match(/^(.+):(\d+):(\d+)$/)
-        if (!m) {
-          addMsg({ type: "error", content: `Usage: /lsp ${isHover ? "hover" : "def"} <file>:<line>:<col>\n  e.g. /lsp ${isHover ? "hover" : "def"} src/auth.ts:42:15` })
-          cm.addHistory(input)
-          setHistory(cm.getHistory())
-          return
-        }
-        const [, filePath, lineStr, colStr] = m
-        const line = parseInt(lineStr, 10)
-        const col = parseInt(colStr, 10)
-        setAgentStatus("thinking")
-        setCurrentTokens("")
-        try {
-          const mgr = LspManager.getInstance()
-          if (isHover) {
-            const result = await mgr.hover(filePath, line, col, cwd)
-            setAgentStatus("idle")
-            if (!result) {
-              addMsg({ type: "error", content: `No hover info at ${filePath}:${line}:${col}\nMake sure the LSP server is installed (typescript-language-server / rust-analyzer / gopls / pylsp).` })
-            } else {
-              addMsg({ type: "command", commandTitle: `hover (${result.server})  ${filePath}:${line}:${col}`, content: result.text })
-            }
-          } else {
-            const result = await mgr.definition(filePath, line, col, cwd)
-            setAgentStatus("idle")
-            if (!result) {
-              addMsg({ type: "error", content: `No definition found at ${filePath}:${line}:${col}` })
-            } else {
-              addMsg({ type: "command", commandTitle: `definition (${result.server})`, content: `  ${result.targetFile}:${result.targetLine}` })
-            }
-          }
-        } catch (e) {
-          setAgentStatus("idle")
-          addMsg({ type: "error", content: String(e) })
-        }
-        cm.addHistory(input)
-        setHistory(cm.getHistory())
-        return
-      }
-
-      // ── /attach ───────────────────────────────────────────────────────────────
-      if (input === "/attach") {
-        setFilePicker(true);
-        (async () => {
-          setFileList(await listCwdFiles(cwd));
-        })();
-        return;
-      }
-
-      // ── /compact ──────────────────────────────────────────────────────────────
-      if (input === "/compact") {
-        if (messages.length === 0) {
-          addMsg({ type: "error", content: "Nothing to compact." });
-          return;
-        }
-        setAgentStatus("thinking");
-        setCurrentTokens("");
-        const summary = messages
-          .map((m) => {
-            if (m.type === "text" && m.content.startsWith("> "))
-              return `User: ${m.content.slice(2)}`;
-            if (m.type === "done")
-              return `Assistant: ${m.content.replace(/^DONE:\s*/i, "").trim()}`;
-            if (m.type === "tool_call" && m.toolCall)
-              return `  [${m.toolCall.tool}]`;
-            return null;
-          })
-          .filter(Boolean)
-          .join("\n");
-        const summaryMsgs = [
-          {
-            role: "system" as const,
-            content:
-              "You are a helpful assistant. Summarize the following conversation concisely in bullet points, preserving key decisions and results.",
-          },
-          { role: "user" as const, content: summary },
-        ];
-        let compacted = "";
-        try {
-          const result = await LLMRouter.stream(summaryMsgs, cm.get().llm, (t) => {
-            compacted += t;
-            setCurrentTokens(compacted);
-          });
-          compacted = result.response || compacted;
-        } catch {}
-        setCurrentTokens("");
-        setAgentStatus("idle");
-        setMessages([]);
-        setConvHistory([]);
-        addMsg({ type: "done", content: `[Compacted]\n${compacted}` });
-        return;
-      }
-
-      // ── /session ──────────────────────────────────────────────────────────────
-      if (input.startsWith("/session")) {
-        const rest = input.slice(8).trim();
-        const [sub, ...rest2] = rest.split(/\s+/);
-        const name = rest2.join(" ").trim() || sub;
-
-        if (!sub || sub === "list") {
-          const sessions = cm.listSessions();
-          showInfo(
-            "sessions",
-            sessions.length
-              ? [
-                  "**Saved sessions**",
-                  "",
-                  ...sessions.map((s) => `  • ${s}`),
-                  "",
-                  "  /session load <name>   Restore  ·  /session delete <name>   Remove",
-                ]
-              : [
-                  "  No sessions saved yet.",
-                  "",
-                  "  /session save <name>   Bookmark this conversation",
-                ],
-          );
-        } else if (sub === "save") {
-          if (!name || name === "save") {
-            addMsg({ type: "error", content: "Usage: /session save <name>" });
-            return;
-          }
-          cm.saveSession(name, messages);
-          addMsg({
-            type: "done",
-            content: `Session "${name}" saved  (${messages.length} messages)`,
-          });
-        } else if (sub === "load") {
-          if (!name || name === "load") {
-            addMsg({ type: "error", content: "Usage: /session load <name>" });
-            return;
-          }
-          const loaded = cm.loadSession(name);
-          if (!loaded) {
-            addMsg({ type: "error", content: `Session "${name}" not found.` });
-            return;
-          }
-          setMessages(loaded);
-          addMsg({
-            type: "done",
-            content: `Session "${name}" loaded  (${loaded.length} messages)`,
-          });
-        } else if (sub === "delete") {
-          if (!name || name === "delete") {
-            addMsg({ type: "error", content: "Usage: /session delete <name>" });
-            return;
-          }
-          cm.deleteSession(name);
-          addMsg({ type: "done", content: `Session "${name}" deleted` });
-        } else {
-          addMsg({
-            type: "error",
-            content:
-              "Usage: /session [list|save <name>|load <name>|delete <name>]",
-          });
-        }
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── /connect ──────────────────────────────────────────────────────────────
-      if (input === "/connect") {
-        setInputValue("");
-        setConnectPopup(true);
-        return;
-      }
-
-      // ── /model ────────────────────────────────────────────────────────────────
-      if (input === "/model") {
-        setInputValue("");
-        setModelPicker(true);
-        setModelLoading(true);
-        setModelList([]);
-        (async () => {
-          const cfg = cm.get();
-          const isOllama = cfg.llm.provider === "ollama";
-          const list = isOllama
-            ? await LLMRouter.getOllamaProvider().listModels(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().listModels(cfg.llm.baseURL);
-          setModelList(list);
-          setModelLoading(false);
-        })();
-        return;
-      }
-
-      // ── /plugin ───────────────────────────────────────────────────────────────
-      if (input === "/plugin" || input.startsWith("/plugin ")) {
-        const rest = input.slice(7).trim();
-        const [sub, ...rest2] = rest.split(/\s+/);
-        const arg = rest2.join(" ").trim();
-
-        if (!sub || sub === "list") {
-          const entries = await listInstalledPlugins(
-            globalRegistry,
-            cm.listDisabledPlugins(),
-          );
-          const lines: string[] = ["**Plugins**", ""];
-          if (entries.length === 0) {
-            lines.push("  No plugins installed.");
-            lines.push("");
-            lines.push("  /plugin install <user/repo>   Install from GitHub");
-            lines.push(
-              "  /plugin install <path>        Install from local path",
-            );
-          } else {
-            for (const e of entries) {
-              const status = !e.enabled
-                ? "[disabled]"
-                : e.loaded
-                  ? "[active]  "
-                  : "[inactive]";
-              lines.push(
-                `  ${status} ${e.name}  v${e.version}  by ${e.author}  — ${e.description}`,
-              );
-              if (e.tools.length > 0)
-                lines.push(`    tools    : ${e.tools.join(", ")}`);
-              if (e.commands.length > 0)
-                lines.push(`    commands : ${e.commands.join(", ")}`);
-            }
-          }
-          showInfo("plugins", lines);
-        } else if (sub === "install") {
-          if (!arg) {
-            addMsg({
-              type: "error",
-              content: "Usage: /plugin install <user/repo|url|path>",
-            });
-            cm.addHistory(input);
-            setHistory(cm.getHistory());
-            return;
-          }
-          setAgentStatus("thinking");
-          const result = await installPlugin(
-            arg,
-            globalRegistry,
-            globalCommandRegistry,
-          );
-          setAgentStatus("idle");
-          if (result.ok) {
-            setPluginCmds(
-              globalCommandRegistry
-                .listCommands()
-                .map((c) => ({ cmd: c.cmd, description: c.description })),
-            );
-            const detail = [
-              result.toolCount ? `${result.toolCount} tool(s)` : "",
-              result.commandCount ? `${result.commandCount} command(s)` : "",
-            ]
-              .filter(Boolean)
-              .join(", ");
-            addMsg({
-              type: "done",
-              content: `Plugin "${result.name}" installed${detail ? ` (${detail})` : ""}`,
-            });
-          } else {
-            addMsg({
-              type: "error",
-              content: `Install failed: ${result.error}`,
-            });
-          }
-        } else if (sub === "remove") {
-          if (!arg) {
-            addMsg({ type: "error", content: "Usage: /plugin remove <name>" });
-            cm.addHistory(input);
-            setHistory(cm.getHistory());
-            return;
-          }
-          setAgentStatus("thinking");
-          const result = await removePlugin(
-            arg,
-            globalRegistry,
-            globalCommandRegistry,
-          );
-          setAgentStatus("idle");
-          if (result.ok) {
-            setPluginCmds(
-              globalCommandRegistry
-                .listCommands()
-                .map((c) => ({ cmd: c.cmd, description: c.description })),
-            );
-            addMsg({ type: "done", content: `Plugin "${arg}" removed` });
-          } else {
-            addMsg({ type: "error", content: result.error ?? "Remove failed" });
-          }
-        } else if (sub === "reload") {
-          globalRegistry
-            .listTools()
-            .filter((t) => t.pluginName !== undefined)
-            .forEach((t) => globalRegistry.removeTool(t.name));
-          globalCommandRegistry
-            .listCommands()
-            .forEach((c) => globalCommandRegistry.removeCommand(c.cmd));
-          const results = await loadPlugins(
-            globalRegistry,
-            globalCommandRegistry,
-          );
-          const loaded = results.filter((r) => r.success).length;
-          setPluginCmds(
-            globalCommandRegistry
-              .listCommands()
-              .map((c) => ({ cmd: c.cmd, description: c.description })),
-          );
-          addMsg({
-            type: "done",
-            content: `Plugins reloaded (${loaded} loaded)`,
-          });
-        } else if (sub === "disable") {
-          if (!arg) {
-            addMsg({ type: "error", content: "Usage: /plugin disable <name>" });
-            cm.addHistory(input);
-            setHistory(cm.getHistory());
-            return;
-          }
-          if (cm.isPluginDisabled(arg)) {
-            addMsg({
-              type: "error",
-              content: `Plugin "${arg}" is already disabled`,
-            });
-          } else {
-            cm.disablePlugin(arg);
-            globalRegistry.removePluginTools(arg);
-            globalCommandRegistry.removePluginCommands(arg);
-            setPluginCmds(
-              globalCommandRegistry
-                .listCommands()
-                .map((c) => ({ cmd: c.cmd, description: c.description })),
-            );
-            addMsg({ type: "done", content: `Plugin "${arg}" disabled` });
-          }
-        } else if (sub === "enable") {
-          if (!arg) {
-            addMsg({ type: "error", content: "Usage: /plugin enable <name>" });
-            cm.addHistory(input);
-            setHistory(cm.getHistory());
-            return;
-          }
-          if (!cm.isPluginDisabled(arg)) {
-            addMsg({
-              type: "error",
-              content: `Plugin "${arg}" is not disabled`,
-            });
-          } else {
-            cm.enablePlugin(arg);
-            setAgentStatus("thinking");
-            const result = await reloadPlugin(
-              arg,
-              globalRegistry,
-              globalCommandRegistry,
-            );
-            setAgentStatus("idle");
-            setPluginCmds(
-              globalCommandRegistry
-                .listCommands()
-                .map((c) => ({ cmd: c.cmd, description: c.description })),
-            );
-            if (result.success) {
-              addMsg({ type: "done", content: `Plugin "${arg}" enabled` });
-            } else {
-              addMsg({
-                type: "error",
-                content: `Plugin "${arg}" enabled but failed to load: ${result.error}`,
-              });
-            }
-          }
-        } else {
-          addMsg({
-            type: "error",
-            content:
-              "Usage: /plugin [list | install <source> | remove <name> | reload | enable <name> | disable <name>]",
-          });
-        }
-        cm.addHistory(input);
-        setHistory(cm.getHistory());
-        return;
-      }
-
-      // ── Plugin slash-command routing ──────────────────────────────────────────
-      if (input.startsWith("/")) {
-        const trimmed = input.trim();
-        const matched = globalCommandRegistry.getCommand(trimmed);
-        if (matched) {
-          const key = matched.cmd.trimEnd();
-          const args = trimmed.slice(key.length).trim();
-          setAgentStatus("thinking");
-          try {
-            const result = await matched.handler(args, { cwd });
-            setAgentStatus("idle");
-            if (result.type === "error") {
-              addMsg({ type: "error", content: result.content });
-            } else if (result.type === "command") {
-              addMsg({
-                type: "command",
-                commandTitle: result.title,
-                content: result.content,
-              });
-            } else {
-              addMsg({ type: "done", content: result.content });
-            }
-          } catch (e) {
-            setAgentStatus("idle");
-            addMsg({ type: "error", content: `Plugin error: ${String(e)}` });
-          }
-          cm.addHistory(input);
-          setHistory(cm.getHistory());
-          return;
-        }
-      }
-
-      switch (input.trim().toLowerCase()) {
-        case "exit":
-        case "quit":
-          exit();
-          return;
-        case "clear":
-          setMessages([]);
-          return;
-        case "help":
-        case "/help":
-          showInfo("help", [
-            "**Attachments**",
-            "  /attach                        Attach file or image (@-picker)",
-            "  @path/to/file                  Include file in message",
-            "",
-            "**Session**",
-            "  /session                       List saved sessions",
-            "  /session save <name>           Save conversation",
-            "  /session load <name>           Load conversation",
-            "  /session delete <name>         Delete session",
-            "  /compact                       Summarize & compress conversation",
-            "",
-            "**Connection**",
-            "  /connect                       Connect to server (popup)",
-            "  /model                         Select model (popup)",
-            "",
-            "**Configuration**",
-            "  /config                        Show current configuration",
-            "  /config provider ollama        Use Ollama  (localhost:11434)",
-            "  /config provider lmstudio      Use LM Studio  (localhost:1234)",
-            "  /config model <name>           Switch model",
-            "  /config url <url>              Set base URL",
-            "  /config temperature <val>      Set temperature (0.0–1.0)",
-            "",
-            "**System**",
-            "  /lsp                           Run diagnostics (tsc/cargo/go vet/eslint)",
-            "  /lsp hover <file>:<line>:<col>  Hover info via LSP server",
-            "  /lsp def <file>:<line>:<col>    Go-to-definition via LSP server",
-            "  /models                        List available models",
-            "  /doctor                        Check connection & status",
-            "  /clear                         Clear screen",
-            "  /exit                          Quit",
-            "",
-            "**Keyboard shortcuts**",
-            "  ctrl+c                         Abort agent  /  quit",
-            "  ctrl+l                         Clear chat history",
-            "  ctrl+k                         Clear input line",
-            "  ↑ ↓                            Navigate input history",
-            "  tab                            Autocomplete / toggle BUILD↔PLAN",
-            "  scroll wheel / PgUp / PgDn     Scroll chat",
-            "",
-            "**Shell**",
-            "  $ <cmd>   or   ! <cmd>         e.g.: $ npm test",
-            "",
-            "**Plugins**",
-            "  /plugin                        List installed plugins",
-            "  /plugin install <path>         Install plugin",
-            "  /plugin remove <name>          Uninstall a plugin",
-            "  /plugin reload                 Reload all plugins",
-          ]);
-          break;
-        case "doctor": {
-          showInfo("doctor", ["  Checking…"]);
-          const cfg = cm.get();
-          const isOllama = cfg.llm.provider === "ollama";
-          const healthy = isOllama
-            ? await LLMRouter.getOllamaProvider().checkHealth(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().checkHealth(
-                cfg.llm.baseURL,
-              );
-          const provName = isOllama ? "Ollama" : "LM Studio";
-          const provHint = isOllama
-            ? "ollama serve"
-            : "LM Studio → start Local Server";
-          showInfo("doctor", [
-            `  Node.js   : ✓ ${process.version}`,
-            `  Platform  : ✓ ${process.platform}`,
-            `  ${provName.padEnd(9)}: ${healthy ? "✓ Reachable" : `✗ Not reachable — ${provHint}`}`,
-            `  Provider  : ${cfg.llm.provider}`,
-            `  Model     : ${cfg.llm.model}`,
-            `  URL       : ${cfg.llm.baseURL || "(default)"}`,
-            `  Config    : ${cm.getConfigPath()}`,
-          ]);
-          break;
-        }
-        case "models": {
-          showInfo("models", ["  Loading…"]);
-          const cfg = cm.get();
-          const isOllama = cfg.llm.provider === "ollama";
-          const models = isOllama
-            ? await LLMRouter.getOllamaProvider().listModels(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().listModels(cfg.llm.baseURL);
-          const provName = isOllama ? "Ollama" : "LM Studio";
-          showInfo(
-            "models",
-            models.length
-              ? [
-                  "**Available models**",
-                  "",
-                  ...models.map((m) => `  • ${m}`),
-                  "",
-                  `  /config model <name>  to switch`,
-                ]
-              : isOllama
-                ? [
-                    "  No Ollama models found.",
-                    "",
-                    "  $ ollama pull deepseek-coder",
-                  ]
-                : [
-                    "  No LM Studio models found.",
-                    "",
-                    "  Open LM Studio and load a model.",
-                  ],
-          );
-          break;
-        }
-        default: {
-          if (input.startsWith("$") || input.startsWith("!")) {
-            ptyRef.current?.write(input.slice(1).trim() + "\n");
-            break;
-          }
-
-          // Mid-task: inject short side-notes, queue full tasks for after agent finishes
-          if (isRunning && agentRef.current) {
-            if (input.length < 120) {
-              agentRef.current.inject(input);
-              addMsg({ type: "text", content: `> [btw] ${input}` });
-            } else {
-              taskQueueRef.current.push(input);
-              addMsg({ type: "text", content: `> [queued] ${input}` });
-            }
-            break;
-          }
-
-          // Safety: catch local file paths that slipped through drag-and-drop detection
-          // (timing edge cases, unusual terminal quoting, etc.)
-          const strippedForPath = input.trim().replace(/^["']|["']$/g, "");
-          const isLocalPath =
-            /^[A-Za-z]:[\\\/].{2,}/.test(strippedForPath) ||
-            /^\/[^\s]{2,}/.test(strippedForPath);
-          if (isLocalPath) {
-            const att = await loadAttachment(strippedForPath, cwd);
-            if (att) {
-              setAttachments((prev) => [...prev, att]);
-              return;
-            }
-          }
-
-          // Parse @mentions from the input text
-          const atPattern = /@([^\s]+)/g;
-          const pendingAtts: Promise<Attachment | null>[] = [];
-          let cleanInput = input;
-          let m;
-          while ((m = atPattern.exec(input)) !== null) {
-            pendingAtts.push(loadAttachment(m[1], cwd));
-            cleanInput = cleanInput.replace(m[0], `[${m[1]}]`);
-          }
-          const resolved = await Promise.all(pendingAtts);
-          const mentionAtts = resolved.filter(
-            (a): a is Attachment => a !== null,
-          );
-          const allAtts = [...attachments, ...mentionAtts]; // attachments from ref — always fresh
-
-          setAgentStatus("thinking");
-          setCurrentTokens("");
-          setTokenCount(0);
-
-          // Show user message with attachment indicators
-          const attLabel = allAtts.length
-            ? `  [${allAtts.map((a) => a.name).join(", ")}]`
-            : "";
-          addMsg({ type: "text", content: `> ${cleanInput}${attLabel}` });
-          setAttachments([]);
-
-          const agent = new AgentRuntime();
-          agentRef.current = agent;
-
-          // Reset token buffer and tool message log for this run
-          tokenBufRef.current = "";
-          tokenCntRef.current = 0;
-          toolMsgsRef.current = [];
-          streamInThinkingRef.current = false;
-          if (tokenFlushRef.current) {
-            clearTimeout(tokenFlushRef.current);
-            tokenFlushRef.current = null;
-          }
-
-          const flushTokens = () => {
-            tokenFlushRef.current = null;
-            setCurrentTokens(tokenBufRef.current);
-            setTokenCount(tokenCntRef.current);
-          };
-
-          agent.on("thinking", () => {
-            setAgentStatus("thinking");
-            setCurrentTokens("");
-          });
-          agent.on("token", (token: string) => {
-            setAgentStatus("running");
-            const wasEmpty = tokenBufRef.current === "";
-            tokenBufRef.current += token;
-            tokenCntRef.current += token.length;
-            // Track thinking phase: start true on first token, end when </think> seen
-            if (wasEmpty) {
-              streamInThinkingRef.current = true;
-              agentStartTimeRef.current = Date.now();
-            }
-            if (
-              streamInThinkingRef.current &&
-              (tokenBufRef.current.includes("</think>") ||
-                tokenBufRef.current.includes("</thinking>"))
-            ) {
-              streamInThinkingRef.current = false;
-            }
-            if (wasEmpty) {
-              flushTokens();
-            } else if (!tokenFlushRef.current) {
-              tokenFlushRef.current = setTimeout(flushTokens, 16);
-            }
-          });
-          agent.on("tool_call", ({ toolCall }: { toolCall: ToolCall }) => {
-            // Save thinking content before clearing the stream
-            const buf = tokenBufRef.current;
-            if (buf) {
-              const { thinking } = parseThinking(buf);
-              if (thinking.trim()) {
-                addMsg({ type: "thinking", content: thinking });
-              }
-            }
-            if (tokenFlushRef.current) {
-              clearTimeout(tokenFlushRef.current);
-              tokenFlushRef.current = null;
-            }
-            tokenBufRef.current = "";
-            tokenCntRef.current = 0;
-            setCurrentTokens("");
-            addMsg({ type: "tool_call", content: toolCall.tool, toolCall });
-          });
-          agent.on(
-            "tool_result",
-            ({
-              toolCall,
-              result,
-            }: {
-              toolCall: ToolCall;
-              result: ToolResult;
-            }) => {
-              // Save tool exchange for convHistory so follow-up questions have context
-              const toolCallJson = JSON.stringify({
-                tool: toolCall.tool,
-                arguments: toolCall.arguments,
-              });
-              const toolOut = result.success
-                ? (result.output || "").slice(0, 3000)
-                : `error: ${result.error || "unknown"}`;
-              toolMsgsRef.current.push(
-                { role: "assistant", content: toolCallJson },
-                {
-                  role: "user",
-                  content: `Tool "${toolCall.tool}" result:\n${toolOut}`,
-                },
-              );
-              addMsg({
-                type: "tool_result",
-                content: "",
-                toolCall,
-                toolResult: result,
-              });
-            },
-          );
-          agent.on(
-            "confirm_required",
-            ({
-              toolCall,
-              reason,
-              diffPreview,
-              dangerous,
-            }: {
-              toolCall: ToolCall;
-              reason: string;
-              diffPreview?: DiffPreview;
-              dangerous?: boolean;
-            }) => {
-              setConfirm({ toolCall, reason, diffPreview, dangerous });
-            },
-          );
-          agent.on("injection", ({ message }: { message: string }) => {
-            // Already shown in the UI when inject() was called; just acknowledge
-          });
-          agent.on("error", (msg: string) => {
-            if (tokenFlushRef.current) {
-              clearTimeout(tokenFlushRef.current);
-              tokenFlushRef.current = null;
-            }
-            tokenBufRef.current = "";
-            tokenCntRef.current = 0;
-            setAgentStatus("error");
-            addMsg({ type: "error", content: msg });
-          });
-          agent.on(
-            "done",
-            ({
-              response,
-              aborted,
-              tokenCount: actualTokenCount,
-            }: {
-              response: string;
-              aborted?: boolean;
-              tokenCount?: number;
-            }) => {
-              if (tokenFlushRef.current) {
-                clearTimeout(tokenFlushRef.current);
-                tokenFlushRef.current = null;
-              }
-              tokenBufRef.current = "";
-              tokenCntRef.current = 0;
-              setCurrentTokens("");
-              setAgentStatus("idle");
-              setConfirm(null);
-              agentRef.current = null;
-              // "Aborted." is already shown by the Ctrl+C handler — don't double-print
-              if (!aborted && response) {
-                addMsg({
-                  type: "done",
-                  content: response,
-                  tokenCount: actualTokenCount,
-                  durationMs: agentStartTimeRef.current
-                    ? Date.now() - agentStartTimeRef.current
-                    : undefined,
-                });
-                setConvHistory((prev) =>
-                  [
-                    ...prev,
-                    { role: "user" as const, content: cleanInput },
-                    ...toolMsgsRef.current,
-                    { role: "assistant" as const, content: response },
-                  ].slice(-60),
-                );
-              }
-              // Run next queued task if any (only when not aborted)
-              if (!aborted && taskQueueRef.current.length > 0) {
-                const next = taskQueueRef.current.shift()!;
-                setTimeout(() => handleSubmit(next), 50);
-              }
-            },
-          );
-          const { convHistory } = s.current;
-          agent
-            .run(cleanInput, cwd, allAtts, mode, convHistory)
-            .catch((err: Error) => {
-              setAgentStatus("error");
-              addMsg({ type: "error", content: String(err) });
-              agentRef.current = null;
-              // Auto-compact after crash so the context is preserved for next run
-              if (s.current.messages.length > 3 && !crashCompactRef.current) {
-                crashCompactRef.current = true;
-                addMsg({ type: "text", content: "> [auto-compact after crash]" });
-                setTimeout(() => {
-                  crashCompactRef.current = false;
-                  handleSubmit("/compact");
-                }, 400);
-              }
-            });
-          break;
-        }
-      }
-
-      cm.addHistory(input);
-      setHistory(cm.getHistory());
-    },
-    [addMsg, cwd, exit],
-  );
+  useEffect(() => {
+    if (initialCommand) {
+      const t = setTimeout(() => handleSubmit(initialCommand), 150);
+      return () => clearTimeout(t);
+    }
+  }, []);
 
   useInput((key, inp) => {
     // ── Wenn Popup offen: nur Ctrl+C durchlassen, Rest übernimmt Popup ──
@@ -1932,6 +327,45 @@ export const App: React.FC<AppProps> = ({
         setConnectPopup(false);
         setModelPicker(false);
         setFilePicker(false);
+      }
+      return;
+    }
+
+    // ── Browse-Modus ──
+    if (inp.ctrl && key === "b" && !infoPopup) {
+      if (!browseMode) {
+        if (toolResultMsgIds.length === 0) return;
+        setBrowseMode(true);
+        setFocusedToolIdx(toolResultMsgIds.length - 1);
+      } else {
+        setBrowseMode(false);
+      }
+      return;
+    }
+    if (browseMode) {
+      if (inp.escape) {
+        setBrowseMode(false);
+        return;
+      }
+      if (inp.upArrow || inp.pageUp) {
+        setFocusedToolIdx((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (inp.downArrow || inp.pageDown) {
+        setFocusedToolIdx((i) => Math.min(toolResultMsgIds.length - 1, i + 1));
+        return;
+      }
+      if (inp.return) {
+        const id = toolResultMsgIds[focusedToolIdx];
+        if (id) {
+          setExpandedResults((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+          });
+        }
+        return;
       }
       return;
     }
@@ -1962,20 +396,20 @@ export const App: React.FC<AppProps> = ({
       return;
     }
 
-    // ── Scrollen (immer verfügbar wenn Chat sichtbar) ──
-    if (!showSplash) {
+    // ── Scroll (line-based) ───────────────────────────────────────────────────
+    if (!showSplash && !connectPopup && !modelPicker && !filePicker) {
       if (inp.pageUp) {
-        setScrollOffset((o) => o + 2);
+        setScrollOffset((o) => o + 20);
         return;
       }
       if (inp.pageDown) {
-        setScrollOffset((o) => Math.max(0, o - 2));
+        setScrollOffset((o) => Math.max(0, o - 20));
         return;
       }
     }
 
     if (!showSplash && agentStatus === "idle") {
-      // ── Picker aktiv: Pfeiltasten + Tab/Escape steuern den Picker ──
+      // ── Picker aktiv ──
       if (showPicker) {
         if (inp.upArrow) {
           setPickerIdx((i) => Math.max(0, i - 1));
@@ -1989,7 +423,7 @@ export const App: React.FC<AppProps> = ({
           const sel = slashCmds[pickerIdx];
           if (sel) {
             setInputValue(sel.cmd.endsWith(" ") ? sel.cmd : sel.cmd.trim());
-            setInputKey((k) => k + 1); // remount TextInput → cursor to end
+            setInputKey((k) => k + 1);
             setPickerIdx(0);
           }
           return;
@@ -2003,18 +437,11 @@ export const App: React.FC<AppProps> = ({
         return;
       }
 
-      // ── Kein Picker: Tab cycles BUILD → PLAN → DEBUG BUILD → BUILD oder Autocomplete ──
+      // ── Tab cycles BUILD → PLAN → DEBUG → BUILD or Autocomplete ──
       if (inp.tab && !suggestion) {
-        if (mode === "build" && !debugMode) {
-          setMode("plan");
-        } else if (mode === "plan") {
-          setMode("build");
-          setDebugMode(true);
-          cm.set({ debugMode: true });
-        } else if (mode === "build" && debugMode) {
-          setDebugMode(false);
-          cm.set({ debugMode: false });
-        }
+        if (mode === "build") setMode("plan");
+        else if (mode === "plan") { setMode("debug"); cm.set({ debugMode: true }); }
+        else if (mode === "debug") { setMode("build"); cm.set({ debugMode: false }); }
         return;
       }
       if (inp.tab && suggestion) {
@@ -2022,7 +449,6 @@ export const App: React.FC<AppProps> = ({
         return;
       }
       if (inp.upArrow) {
-        // Empty input + not navigating history → scroll chat up (wheel-friendly)
         if (inputValue === "" && histIndex === -1) {
           setScrollOffset((o) => o + 1);
           return;
@@ -2033,7 +459,7 @@ export const App: React.FC<AppProps> = ({
         return;
       }
       if (inp.downArrow) {
-        if (inputValue === "" && histIndex === -1) {
+        if (inputValue === "" && histIndex === -1 && scrollOffset > 0) {
           setScrollOffset((o) => Math.max(0, o - 1));
           return;
         }
@@ -2047,13 +473,26 @@ export const App: React.FC<AppProps> = ({
         setHistIndex(-1);
         return;
       }
+
+      // Toggle reasoning expansion on last done message
+      if (key === "r" && !inp.ctrl && !inp.meta && inputValue === "") {
+        const lastDone = [...messages].reverse().find((m) => m.type === "done" && m.content);
+        if (lastDone) {
+          setExpandedThinking((prev) => {
+            const n = new Set(prev);
+            n.has(lastDone.id) ? n.delete(lastDone.id) : n.add(lastDone.id);
+            return n;
+          });
+        }
+        return;
+      }
     }
 
     if (inp.ctrl && key === "c") {
       if (agentRef.current) {
         agentRef.current.abort();
         agentRef.current = null;
-        taskQueueRef.current = []; // discard queued tasks when aborting
+        taskQueueRef.current = [];
         if (tokenFlushRef.current) {
           clearTimeout(tokenFlushRef.current);
           tokenFlushRef.current = null;
@@ -2094,24 +533,11 @@ export const App: React.FC<AppProps> = ({
   });
 
   const config = cm.get();
-  const providerLabel =
-    config.llm.provider === "lmstudio" ? "LM Studio" : "Ollama";
-  const modeLabel = mode === "plan" ? "PLAN MODE" : "BUILD MODE";
+  const modeLabel = mode === "plan" ? "PLAN MODE" : mode === "debug" ? "DEBUG MODE" : "BUILD MODE";
 
-  // ── Layout budget (computed once, drives both chat turns AND stream block) ────
+  // ── Layout budget ────────────────────────────────────────────────────────────
   const { thinking: streamThinking } = parseThinking(currentTokens);
-  const streamThinkReserve = streamThinking ? 1 : 0; // 1 line: "Reasoning ... <text>"
-  const maxStreamLines =
-    currentTokens || isRunning
-      ? Math.max(3, termRows - 14 - streamThinkReserve)
-      : 0;
-  const innerStreamW = Math.max(20, termCols - 10);
-  const streamH =
-    currentTokens || isRunning
-      ? currentTokens
-        ? streamThinkReserve + 1 + maxStreamLines
-        : 2
-      : 0;
+  const streamThinkReserve = streamThinking ? 1 : 0;
   const layoutPickerH = showPicker ? Math.min(slashCmds.length + 3, 10) : 0;
   const layoutAttachH = attachments.length > 0 ? 1 : 0;
   const layoutConfirmDiffH = confirm?.diffPreview
@@ -2128,15 +554,23 @@ export const App: React.FC<AppProps> = ({
     ? Math.min(3 + layoutConfirmDiffH, termRows - 8)
     : 0;
   const layoutInputH = 4 + layoutAttachH;
-  // 1 = status bar, 1 = scroll indicator line, 1 = spacer
   const layoutReserved =
-    layoutInputH + 1 + layoutPickerH + streamH + layoutConfirmH + 3;
-  const chatAvailable = Math.max(2, termRows - layoutReserved);
+    layoutInputH + layoutPickerH + layoutConfirmH + 2;
+  const chatAvailable = Math.max(4, termRows - layoutReserved);
   const chatInnerW = Math.max(20, termCols - 8);
+  const maxStreamLines = (currentTokens || isRunning)
+    ? Math.max(3, Math.min(8, Math.floor(chatAvailable / 3)))
+    : 0;
+  const innerStreamW = Math.max(20, termCols - 10);
+  const streamH = (currentTokens || isRunning)
+    ? currentTokens
+      ? streamThinkReserve + 1 + maxStreamLines
+      : 2
+    : 0;
 
   return (
     <Box flexDirection="column" height={termRows}>
-      {/* ── Update banner (top-right, 1 line) ── */}
+      {/* ── Update banner ── */}
       {updateInfo && (
         <Box justifyContent="flex-end" flexShrink={0}>
           <Text backgroundColor="#92400E" color="#FEF3C7" bold>
@@ -2149,7 +583,7 @@ export const App: React.FC<AppProps> = ({
         </Box>
       )}
       {showSplash ? (
-        /* ── Splash: fills terminal, status bar at bottom ── */
+        /* ── Splash ── */
         <>
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             <Splash
@@ -2157,9 +591,13 @@ export const App: React.FC<AppProps> = ({
               history={history}
               mode={mode}
               onSubmit={handleSubmit}
-              onToggleMode={() =>
-                setMode((m) => (m === "build" ? "plan" : "build"))
-              }
+              onToggleMode={() => {
+                setMode((m) => {
+                  if (m === "build") return "plan";
+                  if (m === "plan") { cm.set({ debugMode: true }); return "debug"; }
+                  cm.set({ debugMode: false }); return "build";
+                });
+              }}
               termRows={termRows}
             />
           </Box>
@@ -2167,15 +605,13 @@ export const App: React.FC<AppProps> = ({
             config={config}
             cwd={cwd}
             agentStatus={agentStatus}
-            tokenCount={tokenCount}
+            tokenCount={totalTokens}
             mode={mode}
-            debugMode={debugMode}
           />
         </>
       ) : (
         /* ── Chat view ── */
         <>
-          {/* Spacer pushes chat content to the bottom of available space */}
           <Box flexGrow={1} flexShrink={1} />
 
           {infoPopup ? (
@@ -2191,31 +627,106 @@ export const App: React.FC<AppProps> = ({
           {!infoPopup &&
             (() => {
               const allTurns = groupIntoTurns(messages);
-              const safeOffset = Math.min(
-                scrollOffset,
-                Math.max(0, allTurns.length - 1),
-              );
+              const availForTurns = Math.max(2, chatAvailable - streamH);
+              const totalTurnLines = allTurns.reduce((s, t) => s + estimateTurnLines(t, chatInnerW), 0);
+              const maxScroll = Math.max(0, totalTurnLines - availForTurns);
+              const safeOffset = Math.min(scrollOffset, maxScroll);
               const { visible, hiddenAbove, hiddenBelow } = getVisibleTurns(
                 allTurns,
-                chatAvailable,
+                availForTurns,
                 chatInnerW,
                 safeOffset,
               );
               hiddenAboveRef.current = hiddenAbove;
 
+              const renderStream = () => {
+                if (!currentTokens && !isRunning) return null;
+                const parsed = parseThinking(currentTokens);
+                const forceThinking =
+                  streamInThinkingRef.current &&
+                  !currentTokens.includes("</think>") &&
+                  !currentTokens.includes("</thinking>");
+                const thinking = forceThinking ? currentTokens : parsed.thinking;
+                const response = forceThinking ? "" : parsed.response;
+                const stillThinking = forceThinking ? true : parsed.stillThinking;
+                let cleanResponse = response.replace(/```json[\s\S]*?```/gi, "");
+                const toolIdx = cleanResponse.search(/\{[\s\S]*?"tool"\s*:/);
+                if (toolIdx !== -1) cleanResponse = cleanResponse.slice(0, toolIdx);
+                cleanResponse = cleanResponse.replace(/(?:^|\n)DONE:\s*/gi, "\n").trim();
+
+                const srcLines = cleanResponse.split("\n");
+                const rendered: string[] = [];
+                for (const l of srcLines) {
+                  if (!l) { rendered.push(""); continue; }
+                  const chunks = Math.max(1, Math.ceil(l.length / innerStreamW));
+                  for (let c = 0; c < chunks; c++)
+                    rendered.push(l.slice(c * innerStreamW, (c + 1) * innerStreamW));
+                }
+                const overflow = Math.max(0, rendered.length - maxStreamLines);
+                const visibleLines = rendered.slice(overflow);
+                const thinkClean = (() => {
+                  let t = thinking.trim();
+                  const toolIdx = t.search(/\{[^}]*"tool"\s*:/);
+                  if (toolIdx !== -1) t = t.slice(0, toolIdx);
+                  return t;
+                })();
+                const thinkOneLine = thinkClean.replace(/\s+/g, " ").trim();
+
+                return (
+                  <Box flexDirection="column">
+                    {thinking && (
+                      <Box>
+                        <Text color="#3B82F6"> │ </Text>
+                        <Text color="#6366F1" bold>Reasoning{" "}</Text>
+                        {stillThinking && <ThinkingDots label="" />}
+                        {thinkOneLine ? (
+                          <Text color="#4B5563" dimColor italic wrap="truncate-start">
+                            {thinkOneLine}
+                          </Text>
+                        ) : null}
+                      </Box>
+                    )}
+                    {overflow > 0 && (
+                      <Box>
+                        <Text color="#3B82F6"> │ </Text>
+                        <Text color="#4B5563">↑ {overflow} lines above…</Text>
+                      </Box>
+                    )}
+                    {!currentTokens ? (
+                      <Box>
+                        <Text color="#3B82F6"> │ </Text>
+                        <Box flexGrow={1}>
+                          <Text color="#6366F1">Thinking </Text>
+                          <ThinkingDots label="" />
+                        </Box>
+                      </Box>
+                    ) : visibleLines.length > 0 ? (
+                      visibleLines.map((line, i) => (
+                        <Box key={i}>
+                          <Text color="#3B82F6"> │ </Text>
+                          <Text color="#D1D5DB" wrap="truncate-end">{line || " "}</Text>
+                          {i === visibleLines.length - 1 && <Text color="#3B82F6">█</Text>}
+                        </Box>
+                      ))
+                    ) : stillThinking ? (
+                      <Box>
+                        <Text color="#3B82F6"> │ </Text>
+                        <Box flexGrow={1}>
+                          <Text color="#6366F1">Thinking </Text>
+                          <ThinkingDots label="" />
+                        </Box>
+                      </Box>
+                    ) : null}
+                  </Box>
+                );
+              };
+
               return (
                 <>
-                  {/* Scroll-Indikator oben */}
                   {hiddenAbove > 0 ? (
-                    <Box paddingX={1} marginBottom={0}>
-                      <Text backgroundColor="#92400E" color="#FEF3C7">
-                        {" "}
-                        ↑ PageUp{" "}
-                      </Text>
-                      <Text color="#F59E0B" bold>
-                        {" "}
-                        {hiddenAbove} older messages hidden above
-                      </Text>
+                    <Box paddingX={1}>
+                      <Text color="#F59E0B">↑ PgUp  </Text>
+                      <Text color="#6B7280">{hiddenAbove} older {hiddenAbove === 1 ? 'message' : 'messages'} above</Text>
                     </Box>
                   ) : (
                     <Text> </Text>
@@ -2234,129 +745,25 @@ export const App: React.FC<AppProps> = ({
                         messages={turn.messages}
                         model={config.llm.model}
                         maxLines={
-                          i === visible.length - 1
-                            ? Math.max(5, chatAvailable - 4)
+                          i === visible.length - 1 && safeOffset === 0
+                            ? Math.max(5, availForTurns - 4)
                             : undefined
                         }
+                        debugMode={mode === "debug"}
+                        expandedResults={expandedResults}
+                        focusedToolId={focusedToolId}
+                        expandedThinking={expandedThinking}
+                        onToggleThinking={(id) => setExpandedThinking((prev) => {
+                          const n = new Set(prev);
+                          n.has(id) ? n.delete(id) : n.add(id);
+                          return n;
+                        })}
                       />
                     ),
                   )}
 
-                  {/* Scroll-Indikator unten (wenn nach oben gescrollt) */}
-                  {hiddenBelow > 0 && (
-                    <Box paddingX={1}>
-                      <Text backgroundColor="#1E3A5F" color="#BFDBFE">
-                        {" "}
-                        ↓ PageDown{" "}
-                      </Text>
-                      <Text color="#60A5FA" bold>
-                        {" "}
-                        {hiddenBelow} newer messages below
-                      </Text>
-                    </Box>
-                  )}
+                  {renderStream()}
                 </>
-              );
-            })()}
-
-          {/* Live streaming block — height-capped so input is never pushed off */}
-          {(currentTokens || (isRunning && !currentTokens)) &&
-            (() => {
-              // If provider stripped <think> opening tag, treat all content as thinking
-              // until </think> is detected (streamInThinkingRef tracks this)
-              const parsed = parseThinking(currentTokens);
-              const forceThinking =
-                streamInThinkingRef.current &&
-                !currentTokens.includes("</think>") &&
-                !currentTokens.includes("</thinking>");
-              const thinking = forceThinking ? currentTokens : parsed.thinking;
-              const response = forceThinking ? "" : parsed.response;
-              const stillThinking = forceThinking ? true : parsed.stillThinking;
-              // Strip tool-call JSON and DONE: marker (keep the text after it)
-              let cleanResponse = response.replace(/```json[\s\S]*?```/gi, "");
-              const toolIdx = cleanResponse.search(/\{[\s\S]*?"tool"\s*:/);
-              if (toolIdx !== -1)
-                cleanResponse = cleanResponse.slice(0, toolIdx);
-              cleanResponse = cleanResponse
-                .replace(/(?:^|\n)DONE:\s*/gi, "\n")
-                .trim();
-
-              // Use pre-computed maxStreamLines and innerStreamW (same values used in layout budget)
-              const srcLines = cleanResponse.split("\n");
-              const rendered: string[] = [];
-              for (const l of srcLines) {
-                if (!l) {
-                  rendered.push("");
-                  continue;
-                }
-                const chunks = Math.max(1, Math.ceil(l.length / innerStreamW));
-                for (let c = 0; c < chunks; c++)
-                  rendered.push(
-                    l.slice(c * innerStreamW, (c + 1) * innerStreamW),
-                  );
-              }
-              const overflow = Math.max(0, rendered.length - maxStreamLines);
-              const visibleLines = rendered.slice(overflow);
-
-              const thinkOneLine = thinking.trim().replace(/\s+/g, " ");
-
-              return (
-                <Box marginBottom={0} flexDirection="column">
-                  {thinking && (
-                    <Box>
-                      <Text color="#3B82F6"> │ </Text>
-                      <Text color="#6366F1" bold>
-                        Reasoning{" "}
-                      </Text>
-                      {stillThinking && <ThinkingDots label="" />}
-                      {thinkOneLine ? (
-                        <Text
-                          color="#4B5563"
-                          dimColor
-                          italic
-                          wrap="truncate-start"
-                        >
-                          {thinkOneLine}
-                        </Text>
-                      ) : null}
-                    </Box>
-                  )}
-                  {overflow > 0 && (
-                    <Box>
-                      <Text color="#3B82F6"> │ </Text>
-                      <Text color="#4B5563">↑ {overflow} lines above…</Text>
-                    </Box>
-                  )}
-                  {!currentTokens ? (
-                    <Box>
-                      <Text color="#3B82F6"> │ </Text>
-                      <Box flexGrow={1}>
-                        <Text color="#6366F1">Thinking </Text>
-                        <ThinkingDots label="" />
-                      </Box>
-                    </Box>
-                  ) : visibleLines.length > 0 ? (
-                    visibleLines.map((line, i) => (
-                      <Box key={i}>
-                        <Text color="#3B82F6"> │ </Text>
-                        <Text color="#D1D5DB" wrap="truncate-end">
-                          {line || " "}
-                        </Text>
-                        {i === visibleLines.length - 1 && (
-                          <Text color="#3B82F6">█</Text>
-                        )}
-                      </Box>
-                    ))
-                  ) : stillThinking ? (
-                    <Box>
-                      <Text color="#3B82F6"> │ </Text>
-                      <Box flexGrow={1}>
-                        <Text color="#6366F1">Thinking </Text>
-                        <ThinkingDots label="" />
-                      </Box>
-                    </Box>
-                  ) : null}
-                </Box>
               );
             })()}
 
@@ -2454,7 +861,7 @@ export const App: React.FC<AppProps> = ({
             />
           )}
 
-          {/* ── Slash-Command Picker — above input ── */}
+          {/* ── Slash-Command Picker ── */}
           {showPicker && (
             <Box
               flexDirection="column"
@@ -2482,13 +889,13 @@ export const App: React.FC<AppProps> = ({
             </Box>
           )}
 
-          {/* ── Input box (hidden when info popup is open) ── */}
+          {/* ── Input box ── */}
           {!infoPopup && (
             <Box
               flexShrink={0}
               flexDirection="column"
               borderStyle="single"
-              borderColor={mode === "plan" ? "#14532D" : "#1E3A5F"}
+              borderColor={mode === "plan" ? "#14532D" : mode === "debug" ? "#581C87" : "#1E3A5F"}
               marginX={1}
             >
               {/* Attachment strip */}
@@ -2514,7 +921,9 @@ export const App: React.FC<AppProps> = ({
                       ? "#F59E0B"
                       : mode === "plan"
                         ? "#22C55E"
-                        : "#3B82F6"
+                        : mode === "debug"
+                          ? "#A78BFA"
+                          : "#3B82F6"
                   }
                   bold
                 >
@@ -2533,7 +942,7 @@ export const App: React.FC<AppProps> = ({
                         : "/ for commands  ·  @ to attach files"
                   }
                   focus={
-                    !confirm && !connectPopup && !modelPicker && !filePicker
+                    !confirm && !connectPopup && !modelPicker && !filePicker && !browseMode
                   }
                 />
                 {suggestion && !isRunning && (
@@ -2551,23 +960,30 @@ export const App: React.FC<AppProps> = ({
                       <Text color="#4B5563">↵ </Text>
                       <Text color="#6B7280">inject message</Text>
                     </>
+                  ) : browseMode ? (
+                    <>
+                      <Text color="#3B82F6">↑↓ </Text>
+                      <Text color="#6B7280">navigate </Text>
+                      <Text color="#3B82F6">↵ </Text>
+                      <Text color="#6B7280">expand/collapse </Text>
+                      <Text color="#3B82F6">esc </Text>
+                      <Text color="#6B7280">exit browse</Text>
+                    </>
                   ) : (
                     <>
                       <Text color="#4B5563">↵ </Text>
                       <Text color="#6B7280">send </Text>
                       <Text color="#4B5563">tab </Text>
                       <Text color="#6B7280">
-                        {suggestion ? "complete" : debugMode ? "debug→build" : mode === "plan" ? "plan→debug" : "switch mode"}{" "}
+                        {suggestion ? "complete" : mode === "build" ? "→plan" : mode === "plan" ? "→debug" : "→build"}{" "}
                       </Text>
                       <Text color="#4B5563">@ </Text>
                       <Text color="#6B7280">attach</Text>
-                      {hiddenAboveRef.current > 0 && (
+                      {toolResultMsgIds.length > 0 && (
                         <>
                           <Text color="#4B5563"> │ </Text>
-                          <Text color="#F59E0B">↑ PgUp </Text>
-                          <Text color="#D97706">
-                            {hiddenAboveRef.current} hidden
-                          </Text>
+                          <Text color="#4B5563">ctrl+b </Text>
+                          <Text color="#6B7280">expand</Text>
                         </>
                       )}
                     </>
@@ -2575,11 +991,15 @@ export const App: React.FC<AppProps> = ({
                 </Box>
                 <Box>
                   <Text
-                    backgroundColor={mode === "plan" ? "#166534" : "#1D4ED8"}
-                    color={mode === "plan" ? "#86EFAC" : "#BFDBFE"}
+                    backgroundColor={
+                      mode === "plan" ? "#166534" : mode === "debug" ? "#7C3AED" : "#1D4ED8"
+                    }
+                    color={
+                      mode === "plan" ? "#86EFAC" : mode === "debug" ? "#EDE9FE" : "#BFDBFE"
+                    }
                   >
                     {" "}
-                    {mode === "plan" ? "PLAN" : "BUILD"}{" "}
+                    {mode === "plan" ? "PLAN" : mode === "debug" ? "DEBUG" : "BUILD"}{" "}
                   </Text>
                   <Text color="#374151"> </Text>
                   <Text color="#9CA3AF">
@@ -2592,16 +1012,15 @@ export const App: React.FC<AppProps> = ({
             </Box>
           )}
 
-          {/* Status bar — 1 line, never pushed off screen */}
+          {/* Status bar */}
           <Box flexShrink={0}>
-          <StatusBar
-            config={config}
-            cwd={cwd}
-            agentStatus={agentStatus}
-            tokenCount={tokenCount}
-            mode={mode}
-            debugMode={debugMode}
-          />
+            <StatusBar
+              config={config}
+              cwd={cwd}
+              agentStatus={agentStatus}
+              tokenCount={totalTokens}
+              mode={mode}
+            />
           </Box>
         </>
       )}

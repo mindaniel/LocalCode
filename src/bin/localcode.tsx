@@ -103,6 +103,7 @@ const { waitUntilExit } = render(
   {
     exitOnCtrlC: false,
     patchConsole: true,
+    mouse: true,
   }
 )
 

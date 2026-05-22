@@ -9,8 +9,7 @@ interface Props {
   cwd: string
   agentStatus: 'idle' | 'running' | 'thinking' | 'error'
   tokenCount: number
-  mode?: 'build' | 'plan'
-  debugMode?: boolean
+  mode?: 'build' | 'plan' | 'debug'
 }
 
 const HOME = process.env.HOME || process.env.USERPROFILE || ''
@@ -31,7 +30,7 @@ const AGENT_LABEL: Record<string, string> = {
   idle: '', running: 'RUNNING', thinking: 'THINKING', error: 'ERROR',
 }
 
-export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount, mode = 'build', debugMode = false }) => {
+export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCount, mode = 'build' }) => {
   const branchRef = useRef('')
   const lastCwdRef = useRef('')
   if (lastCwdRef.current !== cwd) {
@@ -43,30 +42,20 @@ export const StatusBar: React.FC<Props> = ({ config, cwd, agentStatus, tokenCoun
   const branch = branchRef.current
 
   return (
-    <Box justifyContent="space-between">
-      {/* Left: app name + version + cwd + branch */}
-      <Box>
-        <Text bold color="#60A5FA">localcode </Text>
-        <Text color="#374151">{`v${APP_VERSION}`}  </Text>
-        <Text color="#6B7280">{cwdDisplay}</Text>
-        {branch && <Text color="#4B5563"> ({branch})</Text>}
-        {tokenCount > 0 && <Text color="#374151">  ~{tokenCount} tok</Text>}
-      </Box>
-
-      {/* Right: debug badge + agent status + mode badge */}
-      <Box>
-        {debugMode && (
-          <Text backgroundColor="#7C3AED" color="#EDE9FE"> DEBUG </Text>
-        )}
-        {AGENT_LABEL[agentStatus] && (
-          <Text backgroundColor={AGENT_COLOR[agentStatus]} color="#BFDBFE"> {AGENT_LABEL[agentStatus]} </Text>
-        )}
-        <Text color="#374151">  tab  </Text>
-        <Text
-          backgroundColor={mode === 'plan' ? '#166534' : '#1D4ED8'}
-          color={mode === 'plan' ? '#86EFAC' : '#BFDBFE'}
-        > {mode === 'plan' ? 'PLAN MODE' : 'BUILD MODE'} </Text>
-      </Box>
+    <Box width={process.stdout.columns ?? 80}>
+      <Text bold color="#60A5FA">localcode </Text>
+      <Text color="#374151">{`v${APP_VERSION}`}  </Text>
+      <Text color="#6B7280">{cwdDisplay}</Text>
+      {branch && <Text color="#4B5563"> ({branch})</Text>}
+      {tokenCount > 0 && (
+        <Text color="#374151">
+          {'  ~'}{tokenCount >= 1000 ? `${(tokenCount / 1000).toFixed(1).replace(/\.0$/, '')}k` : tokenCount}{' tokens'}
+        </Text>
+      )}
+      <Box flexGrow={1} />
+      {AGENT_LABEL[agentStatus] && (
+        <Text backgroundColor={AGENT_COLOR[agentStatus]} color="#BFDBFE"> {AGENT_LABEL[agentStatus]} </Text>
+      )}
     </Box>
   )
 }

@@ -140,6 +140,7 @@ export class AgentRuntime extends EventEmitter {
     this.emit('start', { instruction, cwd: workDir })
     this.injectionQueue = []
     let accumulatedTokens = 0
+    const debugMode = !!config.debugMode
 
     for (let i = 0; i < MAX_AGENT_ITERATIONS; i++) {
       if (this.aborted) {
@@ -157,6 +158,7 @@ export class AgentRuntime extends EventEmitter {
       this.emit('thinking')
       let fullResponse = ''
       let iterTokens: number | undefined
+      const iterStart = Date.now()
 
       const MAX_RETRIES = 3
       let lastErr: unknown
@@ -190,6 +192,9 @@ export class AgentRuntime extends EventEmitter {
       }
 
       if (iterTokens) accumulatedTokens += iterTokens
+      if (debugMode) {
+        this.emit('debug_info', { iteration: i + 1, tokens: iterTokens, elapsed: Date.now() - iterStart })
+      }
 
       // Abort may have been triggered while streaming — check before acting on the response
       if (this.aborted) {
@@ -318,7 +323,11 @@ export class AgentRuntime extends EventEmitter {
       }
 
       this.emit('tool_call', { toolCall })
+      const toolStart = Date.now()
       const result = await executeTool(toolCall, workDir)
+      if (debugMode) {
+        this.emit('debug_info', { tool: toolCall.tool, elapsed: Date.now() - toolStart, success: result.success })
+      }
       this.emit('tool_result', { toolCall, result })
 
       // Never put images into tool-result messages — llama.cpp only supports vision

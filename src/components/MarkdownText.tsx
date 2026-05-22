@@ -1,6 +1,10 @@
 import React from 'react'
 import { Box, Text } from 'ink'
 
+function stripInlineMarkers(text: string): string {
+  return text.replace(/\*\*(.*?)\*\*/g, '$1').replace(/`([^`]*)`/g, '$1').replace(/\*(.*?)\*/g, '$1')
+}
+
 // ── Inline formatter: `code`, **bold**, *italic* ──────────────────────────────
 const InlinePart: React.FC<{ text: string }> = ({ text }) => {
   type Seg = { t: string; code?: true; bold?: true; italic?: true }
@@ -42,6 +46,7 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
   let inCode = false
   let codeLang = ''
   let codeLines: string[] = []
+  let tableRowIdx = 0
 
   const flushCode = (key: string) => {
     nodes.push(
@@ -67,41 +72,63 @@ export const MarkdownText: React.FC<{ content: string }> = ({ content }) => {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
+    const trimmed = line.trimStart()
 
-    if (line.startsWith('```')) {
-      if (!inCode) { inCode = true; codeLang = line.slice(3).trim() }
+    if (trimmed.startsWith('```')) {
+      if (!inCode) { inCode = true; codeLang = trimmed.slice(3).trim() }
       else         { inCode = false; flushCode(`c${i}`) }
       continue
     }
     if (inCode) { codeLines.push(line); continue }
 
-    if (line.startsWith('### ')) {
-      nodes.push(<Text key={i} bold color="#93C5FD" wrap="wrap">{line.slice(4)}</Text>)
-    } else if (line.startsWith('## ')) {
-      nodes.push(<Text key={i} bold color="#60A5FA" wrap="wrap">{line.slice(3)}</Text>)
-    } else if (line.startsWith('# ')) {
-      nodes.push(<Text key={i} bold color="#3B82F6" wrap="wrap">{line.slice(2)}</Text>)
-    } else if (/^[-*+] /.test(line)) {
+    // Table row: | col | col |
+    if (/^\s*\|/.test(line) && /\|/.test(trimmed.slice(1))) {
+      const isSep = /^[\s|:-]+$/.test(trimmed)
+      if (isSep) { tableRowIdx = 0; continue }
+      const isHeader = tableRowIdx === 0
+      const cols = trimmed.replace(/^\||\|$/g, '').split('|').map(c => c.trim())
+      tableRowIdx++
       nodes.push(
         <Box key={i}>
-          <Text color="#6B7280">  • </Text>
-          <Text wrap="wrap"><InlinePart text={line.slice(2)} /></Text>
+          {cols.map((col, ci) => (
+            <Box key={ci} marginRight={2}>
+              <Text color={isHeader ? '#93C5FD' : '#D1D5DB'} bold={isHeader} wrap="truncate-end">
+                <InlinePart text={col} />
+              </Text>
+            </Box>
+          ))}
         </Box>
       )
-    } else if (/^\d+\. /.test(line)) {
-      const m = line.match(/^(\d+)\. (.*)/)!
-      nodes.push(
-        <Box key={i}>
-          <Text color="#6B7280">  {m[1]}. </Text>
-          <Text wrap="wrap"><InlinePart text={m[2]} /></Text>
-        </Box>
-      )
-    } else if (/^---+$/.test(line.trim())) {
-      nodes.push(<Text key={i} color="#374151">{'─'.repeat(48)}</Text>)
-    } else if (!line.trim()) {
-      nodes.push(<Text key={i}>{' '}</Text>)
     } else {
-      nodes.push(<Text key={i} wrap="wrap"><InlinePart text={line} /></Text>)
+      tableRowIdx = 0
+      if (trimmed.startsWith('### ')) {
+        nodes.push(<Text key={i} bold color="#93C5FD" wrap="wrap">{stripInlineMarkers(trimmed.slice(4))}</Text>)
+      } else if (trimmed.startsWith('## ')) {
+        nodes.push(<Text key={i} bold color="#60A5FA" wrap="wrap">{stripInlineMarkers(trimmed.slice(3))}</Text>)
+      } else if (trimmed.startsWith('# ')) {
+        nodes.push(<Text key={i} bold color="#3B82F6" wrap="wrap">{stripInlineMarkers(trimmed.slice(2))}</Text>)
+      } else if (/^[-*+] /.test(trimmed)) {
+        nodes.push(
+          <Box key={i}>
+            <Text color="#6B7280">  • </Text>
+            <Box flexGrow={1}><Text wrap="wrap"><InlinePart text={trimmed.slice(2)} /></Text></Box>
+          </Box>
+        )
+      } else if (/^\d+\. /.test(trimmed)) {
+        const m = trimmed.match(/^(\d+)\. (.*)/)!
+        nodes.push(
+          <Box key={i}>
+            <Text color="#6B7280">  {m[1]}. </Text>
+            <Box flexGrow={1}><Text wrap="wrap"><InlinePart text={m[2]} /></Text></Box>
+          </Box>
+        )
+      } else if (/^---+$/.test(trimmed)) {
+        nodes.push(<Text key={i} color="#4B5563">{'─'.repeat(48)}</Text>)
+      } else if (!trimmed) {
+        nodes.push(<Text key={i}>{' '}</Text>)
+      } else {
+        nodes.push(<Text key={i} wrap="wrap"><InlinePart text={trimmed} /></Text>)
+      }
     }
   }
 

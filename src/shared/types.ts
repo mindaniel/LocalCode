@@ -61,7 +61,7 @@ export interface AppConfig {
 
 export interface AgentMessage {
   id: string
-  type: 'thinking' | 'text' | 'command' | 'tool_call' | 'tool_result' | 'error' | 'done'
+  type: 'thinking' | 'text' | 'command' | 'tool_call' | 'tool_result' | 'error' | 'done' | 'debug'
   content: string
   commandTitle?: string
   toolCall?: ToolCall
@@ -69,4 +69,11 @@ export interface AgentMessage {
   timestamp: number
   tokenCount?: number
   durationMs?: number
+  debugInfo?: {
+    iteration?: number
+    tokens?: number
+    elapsed?: number
+    tool?: string
+    success?: boolean
+  }
 }

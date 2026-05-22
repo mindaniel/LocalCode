@@ -51,7 +51,7 @@ function getSuggestion(input: string, history: string[]): string {
 interface Props {
   config: AppConfig
   history: string[]
-  mode: 'build' | 'plan'
+  mode: 'build' | 'plan' | 'debug'
   onSubmit: (v: string) => void
   onToggleMode: () => void
   termRows: number
@@ -65,6 +65,7 @@ export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onTog
   const suggestion = getSuggestion(value, history)
   const topPad = Math.max(1, Math.floor(termRows / 2) - 10)
   const isPlan = mode === 'plan'
+  const isDebug = mode === 'debug'
 
   useInput((_ch, key) => {
     if (key.tab) {
@@ -109,9 +110,9 @@ export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onTog
       <Text> </Text>
 
       {/* Input panel */}
-      <Box flexDirection="column" borderStyle="single" borderColor={isPlan ? '#14532D' : '#1E3A5F'} minWidth={60}>
+      <Box flexDirection="column" borderStyle="single" borderColor={isPlan ? '#14532D' : isDebug ? '#581C87' : '#1E3A5F'} minWidth={60}>
         <Box paddingX={1}>
-          <Text color={isPlan ? '#22C55E' : '#3B82F6'} bold>{'> '}</Text>
+          <Text color={isPlan ? '#22C55E' : isDebug ? '#A78BFA' : '#3B82F6'} bold>{'> '}</Text>
           <TextInput
             value={value}
             onChange={handleChange}
@@ -125,14 +126,15 @@ export const Splash: React.FC<Props> = ({ config, history, mode, onSubmit, onTog
             <Text color="#4B5563">↵ </Text>
             <Text color="#6B7280">send  </Text>
             <Text color="#4B5563">tab </Text>
-            <Text color="#6B7280">{suggestion ? 'complete' : 'switch mode'}</Text>
+            <Text color="#6B7280">{suggestion ? 'complete' : isPlan ? '→debug' : isDebug ? '→build' : '→plan'}</Text>
           </Box>
           <Box>
-            <Text backgroundColor={isPlan ? '#166534' : '#1D4ED8'} color={isPlan ? '#86EFAC' : '#BFDBFE'}>
-              {' '}{isPlan ? 'PLAN' : 'BUILD'}{' '}
+            <Text backgroundColor={isPlan ? '#166534' : isDebug ? '#7C3AED' : '#1D4ED8'} color={isPlan ? '#86EFAC' : isDebug ? '#EDE9FE' : '#BFDBFE'}>
+              {' '}{isPlan ? 'PLAN' : isDebug ? 'DEBUG' : 'BUILD'}{' '}
             </Text>
             <Text color="#374151">  </Text>
-            <Text color="#9CA3AF">{config.llm.model.length > 20 ? config.llm.model.slice(0, 20) + '…' : config.llm.model}</Text>
+            <Text color="#6B7280">{config.llm.provider}  </Text>
+            <Text color="#9CA3AF">{config.llm.model.length > 24 ? config.llm.model.slice(0, 24) + '…' : config.llm.model}</Text>
           </Box>
         </Box>
       </Box>
