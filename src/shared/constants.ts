@@ -254,6 +254,7 @@ export const BUILTIN_COMMANDS = [
   { cmd: '/plugin enable ',       description: 'Enable a disabled plugin' },
   { cmd: '/plugin disable ',      description: 'Disable a plugin without removing it' },
   { cmd: '/connect',              description: 'Connect to server (popup)' },
+  { cmd: '/restart',              description: 'Restart the managed llama.cpp server with current config' },
   { cmd: '/model',                description: 'Select model (popup)' },
   { cmd: '/attach',               description: 'Attach file or image (@-picker)' },
   { cmd: '/compact',              description: 'Summarize & compress conversation' },

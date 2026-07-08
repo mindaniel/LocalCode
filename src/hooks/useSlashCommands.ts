@@ -208,7 +208,11 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               break
             case 'llamacpp': {
               const [llamaSub, ...llamaRest] = val.split(/\s+/)
-              const llamaVal = llamaRest.join(' ').trim()
+              const llamaValRaw = llamaRest.join(' ').trim()
+              // Users naturally wrap paths in quotes (e.g. copy-pasted from PowerShell) — a single
+              // path value should have those stripped, since they're not part of the actual path.
+              const stripQuotes = (s: string) => s.replace(/^["']|["']$/g, '')
+              const llamaVal = stripQuotes(llamaValRaw)
               const server = cm.get().llamaCppServer ?? {}
               switch ((llamaSub || '').toLowerCase()) {
                 case 'binary':
@@ -570,6 +574,49 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         return
       }
 
+      // ── /restart ──────────────────────────────────────────────────────────────
+      if (input === '/restart') {
+        const cfg = cm.get()
+        if (cfg.llm.provider !== 'llamacpp') {
+          addMsg({
+            type: 'error',
+            content: `/restart only applies to the llamacpp provider (current: ${cfg.llm.provider}).`,
+          })
+          cm.addHistory(input)
+          setHistory(cm.getHistory())
+          return
+        }
+        setAgentStatus('thinking')
+        const progressLines: string[] = []
+        showInfo('llama.cpp', ['Restarting…'])
+        const { ensureLlamaCppRunning } = await import('../llm/LlamaCppServerManager.js')
+        const baseURL = cfg.llm.baseURL || 'http://localhost:8080/v1'
+        const result = await ensureLlamaCppRunning(cfg.llamaCppServer, baseURL, (msg) => {
+          progressLines.push(msg)
+          showInfo('llama.cpp', progressLines)
+        })
+        setAgentStatus('idle')
+
+        if (result.ok) {
+          cm.set({
+            llamaCppServer: {
+              ...cfg.llamaCppServer,
+              binaryPath: result.binaryPath ?? cfg.llamaCppServer?.binaryPath,
+              modelPath: result.modelPath ?? cfg.llamaCppServer?.modelPath,
+            },
+          })
+          const { basename } = await import('path')
+          const modelName = result.modelPath ? basename(result.modelPath) : undefined
+          if (modelName && modelName !== cfg.llm.model) cm.setLLM({ model: modelName })
+          showInfo('llama.cpp', [...progressLines, `✓ Ready — serving ${modelName ?? cfg.llm.model} at ${baseURL}`])
+        } else {
+          showInfo('llama.cpp', [...progressLines, `✗ ${result.error}`])
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
       // ── /model ────────────────────────────────────────────────────────────────
       if (input === '/model') {
         setInputValue('')
@@ -833,6 +880,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '**Connection**',
             '  /connect                       Connect to server (popup)',
             '  /model                         Select model (popup)',
+            '  /restart                       Restart the managed llama.cpp server with current config',
             '',
             '**Configuration**',
             '  /config                        Show current configuration',

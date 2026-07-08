@@ -74,10 +74,20 @@ function resolveBinaryPath(server: LlamaCppServerConfig | undefined): string | u
   return undefined
 }
 
-async function waitForHealth(baseURL: string, timeoutMs: number, expectHealthy: boolean): Promise<boolean> {
+async function waitForHealth(
+  baseURL: string,
+  timeoutMs: number,
+  expectHealthy: boolean,
+  onProgress?: ProgressCallback,
+): Promise<boolean> {
   const start = Date.now()
+  let lastHeartbeat = start
   while (Date.now() - start < timeoutMs) {
     if ((await provider.checkHealth(baseURL)) === expectHealthy) return true
+    if (expectHealthy && onProgress && Date.now() - lastHeartbeat > 15000) {
+      lastHeartbeat = Date.now()
+      onProgress(`Still loading model… (${Math.round((Date.now() - start) / 1000)}s) — large models can take a while`)
+    }
     await new Promise((r) => setTimeout(r, 400))
   }
   return false
@@ -235,7 +245,7 @@ export async function ensureLlamaCppRunning(
     })
     child.unref()
 
-    const healthy = await waitForHealth(baseURL, 45000, true)
+    const healthy = await waitForHealth(baseURL, 10 * 60 * 1000, true, onProgress)
     if (!healthy) {
       return {
         ok: false,
@@ -243,7 +253,7 @@ export async function ensureLlamaCppRunning(
         baseURL,
         binaryPath,
         modelPath,
-        error: 'llama-server did not become reachable within 45s',
+        error: 'llama-server did not become reachable within 10 minutes',
       }
     }
 
