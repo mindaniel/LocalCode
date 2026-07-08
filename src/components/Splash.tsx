@@ -25,7 +25,7 @@ const CODE_LINES = [
 const TIPS = [
   'Start inside a project folder so the agent has codebase context',
   'Run shell commands directly: $ npm test  or  ! git status',
-  'LM Studio: /config provider lmstudio  |  Ollama: /config provider ollama',
+  'LM Studio: /config provider lmstudio  |  Ollama: /config provider ollama  |  llama.cpp: /config provider llamacpp',
   'Try: fix auth bug  ·  analyze architecture  ·  add unit tests',
   'Drag & drop a file into the terminal to attach it automatically',
   'Type @filename to attach a file inline — e.g.  @src/app.ts explain this',

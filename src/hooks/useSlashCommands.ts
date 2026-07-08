@@ -15,7 +15,8 @@ import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 import { loadPlugins, reloadPlugin } from '../plugins/loader.js'
 import { loadAttachment, listCwdFiles } from '../shared/attachments'
 import { parseThinking } from '../shared/utils'
-import { Message } from '../shared/types'
+import { Message, LLMProvider } from '../shared/types'
+import { PROVIDER_META } from '../shared/constants'
 
 interface ConfirmRequest {
   toolCall: ToolCall
@@ -137,9 +138,15 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '**Commands**',
             '  /config provider ollama      Use Ollama  (localhost:11434)',
             '  /config provider lmstudio    Use LM Studio  (localhost:1234)',
+            '  /config provider llamacpp    Use llama.cpp  (localhost:8080)',
             '  /config model <name>         Switch model',
             '  /config url <url>            Override base URL',
             '  /config temperature <val>    Set temperature  (0.0–1.0)',
+            '  /config llamacpp binary <path>     Use your own llama-server binary',
+            '  /config llamacpp model <path>      Switch model (restarts the server)',
+            '  /config llamacpp port <n>          Server port  (default 8080)',
+            '  /config llamacpp autostart <on|off> Auto-launch server on startup  (default on)',
+            '  /config llamacpp installdir <path> Where to auto-download binary/model  (default ~/.localcode/llamacpp)',
           ])
         } else {
           switch (sub.toLowerCase()) {
@@ -155,30 +162,24 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               addMsg({ type: 'done', content: `Model → ${val}` })
               break
             case 'provider': {
-              if (!val || !['ollama', 'lmstudio'].includes(val.toLowerCase())) {
+              const providerId = val.toLowerCase() as LLMProvider
+              if (!val || !(providerId in PROVIDER_META)) {
                 addMsg({
                   type: 'error',
                   content:
-                    'Available providers: ollama  lmstudio\n  /config provider ollama\n  /config provider lmstudio',
+                    'Available providers: ollama  lmstudio  llamacpp\n  /config provider ollama\n  /config provider lmstudio\n  /config provider llamacpp',
                 })
                 break
               }
-              const defaults =
-                val === 'lmstudio'
-                  ? {
-                      provider: 'lmstudio' as any,
-                      baseURL: 'http://localhost:1234/v1',
-                      model: cm.get().llm.model,
-                    }
-                  : {
-                      provider: 'ollama' as any,
-                      baseURL: 'http://localhost:11434',
-                      model: cm.get().llm.model,
-                    }
+              const defaults = {
+                provider: providerId,
+                baseURL: PROVIDER_META[providerId].defaultURL,
+                model: cm.get().llm.model,
+              }
               cm.setLLM(defaults)
               addMsg({
                 type: 'done',
-                content: `Provider → ${val}\nURL → ${defaults.baseURL}`,
+                content: `Provider → ${providerId}\nURL → ${defaults.baseURL}`,
               })
               break
             }
@@ -204,6 +205,68 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               cm.setLLM({ temperature: parseFloat(val) })
               addMsg({ type: 'done', content: `Temperature → ${val}` })
               break
+            case 'llamacpp': {
+              const [llamaSub, ...llamaRest] = val.split(/\s+/)
+              const llamaVal = llamaRest.join(' ').trim()
+              const server = cm.get().llamaCppServer ?? {}
+              switch ((llamaSub || '').toLowerCase()) {
+                case 'binary':
+                  if (!llamaVal) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp binary <path to llama-server(.exe)>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, binaryPath: llamaVal } })
+                  addMsg({ type: 'done', content: `llama.cpp binary → ${llamaVal}` })
+                  break
+                case 'model':
+                  if (!llamaVal) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp model <path to .gguf model>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, modelPath: llamaVal } })
+                  addMsg({ type: 'done', content: `llama.cpp model → ${llamaVal}` })
+                  break
+                case 'port':
+                  if (!llamaVal) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp port <port>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, port: llamaVal } })
+                  addMsg({ type: 'done', content: `llama.cpp port → ${llamaVal}` })
+                  break
+                case 'autostart':
+                  if (!['on', 'off'].includes(llamaVal.toLowerCase())) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp autostart <on|off>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, autoStart: llamaVal.toLowerCase() === 'on' } })
+                  addMsg({ type: 'done', content: `llama.cpp autostart → ${llamaVal.toLowerCase()}` })
+                  break
+                case 'installdir':
+                  if (!llamaVal) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp installdir <path>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, installDir: llamaVal } })
+                  addMsg({
+                    type: 'done',
+                    content: `llama.cpp install dir → ${llamaVal}\nTakes effect next time a binary/model needs downloading.`,
+                  })
+                  break
+                default:
+                  addMsg({
+                    type: 'error',
+                    content:
+                      'Usage: /config llamacpp [binary <path> | model <path> | port <n> | autostart <on|off> | installdir <path>]\n' +
+                      `  binary     : ${server.binaryPath || '(auto-download)'}\n` +
+                      `  model      : ${server.modelPath || '(auto-download)'}\n` +
+                      `  port       : ${server.port || '8080'}\n` +
+                      `  autostart  : ${server.autoStart === false ? 'off' : 'on'}\n` +
+                      `  installdir : ${server.installDir || '~/.localcode/llamacpp (default)'}`,
+                  })
+              }
+              break
+            }
             default:
               addMsg({
                 type: 'error',
@@ -505,10 +568,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         setModelList([])
         ;(async () => {
           const cfg = cm.get()
-          const isOllama = cfg.llm.provider === 'ollama'
-          const list = isOllama
-            ? await LLMRouter.getOllamaProvider().listModels(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().listModels(cfg.llm.baseURL)
+          const list = await LLMRouter.getProvider(cfg.llm.provider).listModels(cfg.llm.baseURL)
           setModelList(list)
           setModelLoading(false)
         })()
@@ -768,9 +828,19 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config                        Show current configuration',
             '  /config provider ollama        Use Ollama  (localhost:11434)',
             '  /config provider lmstudio      Use LM Studio  (localhost:1234)',
+            '  /config provider llamacpp      Use llama.cpp  (localhost:8080)',
             '  /config model <name>           Switch model',
             '  /config url <url>              Set base URL',
             '  /config temperature <val>      Set temperature (0.0–1.0)',
+            '  /config llamacpp binary <path> Use your own llama-server binary',
+            '  /config llamacpp model <path>  Switch model (restarts the server)',
+            '  /config llamacpp installdir <path>  Where auto-downloads go (default ~/.localcode/llamacpp)',
+            '',
+            '**llama.cpp auto-start**',
+            '  When provider is llamacpp, LocalCode auto-launches a llama-server on',
+            '  startup if none is reachable — downloading a binary + small default',
+            '  model on first use unless you set your own via /config llamacpp.',
+            '  Changing the model restarts the server automatically on next launch.',
             '',
             '**System**',
             '  /lsp                           Run diagnostics (tsc/cargo/go vet/eslint)',
@@ -802,20 +872,12 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         case 'doctor': {
           showInfo('doctor', ['  Checking…'])
           const cfg = cm.get()
-          const isOllama = cfg.llm.provider === 'ollama'
-          const healthy = isOllama
-            ? await LLMRouter.getOllamaProvider().checkHealth(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().checkHealth(
-                cfg.llm.baseURL,
-              )
-          const provName = isOllama ? 'Ollama' : 'LM Studio'
-          const provHint = isOllama
-            ? 'ollama serve'
-            : 'LM Studio → start Local Server'
+          const meta = PROVIDER_META[cfg.llm.provider]
+          const healthy = await LLMRouter.getProvider(cfg.llm.provider).checkHealth(cfg.llm.baseURL)
           showInfo('doctor', [
             `  Node.js   : ✓ ${process.version}`,
             `  Platform  : ✓ ${process.platform}`,
-            `  ${provName.padEnd(9)}: ${healthy ? '✓ Reachable' : `✗ Not reachable — ${provHint}`}`,
+            `  ${meta.label.padEnd(9)}: ${healthy ? '✓ Reachable' : `✗ Not reachable — ${meta.startHint}`}`,
             `  Provider  : ${cfg.llm.provider}`,
             `  Model     : ${cfg.llm.model}`,
             `  URL       : ${cfg.llm.baseURL || '(default)'}`,
@@ -826,11 +888,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         case 'models': {
           showInfo('models', ['  Loading…'])
           const cfg = cm.get()
-          const isOllama = cfg.llm.provider === 'ollama'
-          const models = isOllama
-            ? await LLMRouter.getOllamaProvider().listModels(cfg.llm.baseURL)
-            : await LLMRouter.getLMStudioProvider().listModels(cfg.llm.baseURL)
-          const provName = isOllama ? 'Ollama' : 'LM Studio'
+          const meta = PROVIDER_META[cfg.llm.provider]
+          const models = await LLMRouter.getProvider(cfg.llm.provider).listModels(cfg.llm.baseURL)
           showInfo(
             'models',
             models.length
@@ -841,17 +900,11 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                   '',
                   `  /config model <name>  to switch`,
                 ]
-              : isOllama
-                ? [
-                    '  No Ollama models found.',
-                    '',
-                    '  $ ollama pull deepseek-coder',
-                  ]
-                : [
-                    '  No LM Studio models found.',
-                    '',
-                    '  Open LM Studio and load a model.',
-                  ],
+              : [
+                  `  No ${meta.label} models found.`,
+                  '',
+                  `  ${meta.startHint}`,
+                ],
           )
           break
         }

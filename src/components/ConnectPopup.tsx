@@ -3,8 +3,9 @@ import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 
 const PROVIDERS = [
-  { id: 'ollama',    label: 'Ollama',    defaultPort: '11434', urlSuffix: ''    },
+  { id: 'ollama',   label: 'Ollama',    defaultPort: '11434', urlSuffix: ''    },
   { id: 'lmstudio', label: 'LM Studio', defaultPort: '1234',  urlSuffix: '/v1' },
+  { id: 'llamacpp', label: 'llama.cpp', defaultPort: '8080',  urlSuffix: '/v1' },
 ]
 
 type Step = 'provider' | 'ip' | 'port'

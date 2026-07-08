@@ -1,4 +1,4 @@
-export type LLMProvider = 'ollama' | 'lmstudio'
+export type LLMProvider = 'ollama' | 'lmstudio' | 'llamacpp'
 
 export interface LLMConfig {
   provider: LLMProvider
@@ -7,6 +7,15 @@ export interface LLMConfig {
   apiKey?: string
   temperature?: number
   maxTokens?: number
+}
+
+export interface LlamaCppServerConfig {
+  autoStart?: boolean     // spawn llama-server automatically when provider is llamacpp (default true)
+  binaryPath?: string     // path to llama-server(.exe); auto-downloaded if unset
+  modelPath?: string      // path to a .gguf model; auto-downloaded if unset
+  installDir?: string     // where to auto-download binary/model into (default ~/.localcode/llamacpp)
+  port?: string           // default 8080
+  extraArgs?: string      // extra CLI args passed to llama-server, space-separated
 }
 
 export interface Message {
@@ -46,6 +55,7 @@ export interface ToolResult {
 
 export interface AppConfig {
   llm: LLMConfig
+  llamaCppServer?: LlamaCppServerConfig
   theme: 'dark'
   fontSize: number
   shell: string

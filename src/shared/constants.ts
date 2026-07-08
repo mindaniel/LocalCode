@@ -1,5 +1,11 @@
 import * as os from 'os'
-import { AppConfig } from './types'
+import { AppConfig, LLMProvider } from './types'
+
+export const PROVIDER_META: Record<LLMProvider, { label: string; defaultURL: string; startHint: string }> = {
+  ollama:   { label: 'Ollama',    defaultURL: 'http://localhost:11434', startHint: 'ollama serve' },
+  lmstudio: { label: 'LM Studio', defaultURL: 'http://localhost:1234/v1', startHint: 'LM Studio → start Local Server' },
+  llamacpp: { label: 'llama.cpp', defaultURL: 'http://localhost:8080/v1', startHint: 'llama-server -m model.gguf --port 8080' },
+}
 
 export const DEFAULT_CONFIG: AppConfig = {
   llm: {
@@ -259,7 +265,13 @@ export const BUILTIN_COMMANDS = [
   { cmd: '/config model ',        description: 'Switch model' },
   { cmd: '/config provider ollama',   description: 'Use Ollama (localhost:11434)' },
   { cmd: '/config provider lmstudio', description: 'Use LM Studio (localhost:1234)' },
+  { cmd: '/config provider llamacpp', description: 'Use llama.cpp (localhost:8080)' },
   { cmd: '/config url ',          description: 'Set base URL' },
+  { cmd: '/config llamacpp binary ',     description: 'Use your own llama-server binary' },
+  { cmd: '/config llamacpp model ',      description: 'Switch model (restarts the server)' },
+  { cmd: '/config llamacpp port ',       description: 'Set llama.cpp server port' },
+  { cmd: '/config llamacpp autostart ',  description: 'Toggle auto-launching llama-server on startup' },
+  { cmd: '/config llamacpp installdir ', description: 'Where to auto-download binary/model' },
   { cmd: '/help',                 description: 'Show help' },
   { cmd: '/lsp',                  description: 'Run diagnostics (tsc/eslint/cargo/go vet/ruff/rubocop/dotnet/…)' },
   { cmd: '/lsp hover ',           description: 'Hover info at file:line:col  (e.g. /lsp hover src/auth.ts:42:15)' },

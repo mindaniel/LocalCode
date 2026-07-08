@@ -30,7 +30,7 @@ ${chalk.bold('Examples:')}
   ${chalk.gray('localcode --provider ollama --model llama3 fix typescript errors')}
   ${chalk.gray('localcode --provider openai --model gpt-4o create REST API')}
 
-${chalk.bold('Providers:')}  ollama · openai · claude · openrouter · lmstudio
+${chalk.bold('Providers:')}  ollama · lmstudio · llamacpp
 
 ${chalk.bold('Config:')}  ~/.localcode/config.json
 `)
@@ -92,6 +92,45 @@ process.on('exit', exitAltScreen)
 process.on('SIGINT', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
 process.on('SIGTERM', () => { exitAltScreen(); discordPresence.destroy(); process.exit(0) })
 process.on('uncaughtException', () => { exitAltScreen(); discordPresence.destroy(); process.exit(1) })
+
+// ── Auto-start & connect to a local llama.cpp server ──────────────────────
+// Runs before the alt screen so progress prints as plain terminal output.
+async function ensureLocalServer(): Promise<void> {
+  const cm = ConfigManager.getInstance()
+  const cfg = cm.get()
+  if (cfg.llm.provider !== 'llamacpp') return
+
+  const { ensureLlamaCppRunning } = await import('../llm/LlamaCppServerManager.js')
+  const baseURL = cfg.llm.baseURL || 'http://localhost:8080/v1'
+  const result = await ensureLlamaCppRunning(cfg.llamaCppServer, baseURL, (msg) => {
+    process.stdout.write(`${chalk.gray('[localcode]')} ${msg}\n`)
+  })
+
+  if (result.ok) {
+    const { basename } = await import('path')
+    const modelName = result.modelPath ? basename(result.modelPath) : undefined
+    cm.set({
+      llamaCppServer: {
+        ...cfg.llamaCppServer,
+        binaryPath: result.binaryPath ?? cfg.llamaCppServer?.binaryPath,
+        modelPath: result.modelPath ?? cfg.llamaCppServer?.modelPath,
+      },
+    })
+    if (modelName && modelName !== cfg.llm.model) {
+      cm.setLLM({ model: modelName })
+    }
+    if (!result.alreadyRunning) {
+      process.stdout.write(`${chalk.green('[localcode]')} llama-server ready at ${baseURL}\n`)
+    }
+  } else {
+    process.stdout.write(
+      `${chalk.yellow('[localcode]')} Could not auto-start llama.cpp: ${result.error}\n` +
+      `${chalk.yellow('[localcode]')} Continuing anyway — use /connect or /doctor once inside.\n`,
+    )
+  }
+}
+
+await ensureLocalServer()
 
 enterAltScreen()
 loadPlugins(globalRegistry, globalCommandRegistry).catch(() => undefined)

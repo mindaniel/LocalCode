@@ -5,7 +5,7 @@
 # ⚡ LocalCode
 
 **An AI coding agent that runs entirely in your terminal — no cloud account required.**  
-Point it at a local model (Ollama, LM Studio) and start building.
+Point it at a local model (Ollama, LM Studio, or llama.cpp) and start building.
 
 ![npm](https://img.shields.io/npm/v/localcode-agent)
 ![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
@@ -23,7 +23,7 @@ LocalCode is an autonomous AI coding agent with a keyboard-driven terminal UI. D
 ## Requirements
 
 - **Node.js 18+** — [nodejs.org](https://nodejs.org)
-- A running **local LLM server** — Ollama or LM Studio
+- A running **local LLM server** — Ollama, LM Studio, or llama.cpp (`llama-server`)
 
 ---
 
@@ -54,6 +54,12 @@ ollama pull deepseek-coder
 ```
 
 **LM Studio** — download from [lmstudio.ai](https://lmstudio.ai), load a model, click **Start Local Server**.
+
+**llama.cpp** — build or install [llama.cpp](https://github.com/ggml-org/llama.cpp), then run its OpenAI-compatible server:
+
+```bash
+llama-server -m ./models/your-model.gguf --port 8080
+```
 
 ---
 
@@ -115,6 +121,7 @@ Type `/` to open the searchable command picker.
 | `/config` | Show current configuration |
 | `/config provider ollama` | Switch to Ollama |
 | `/config provider lmstudio` | Switch to LM Studio |
+| `/config provider llamacpp` | Switch to llama.cpp |
 | `/config model <name>` | Set the active model |
 | `/config url <url>` | Override the server base URL |
 | `/config temperature <0–1>` | Adjust model temperature |
@@ -248,6 +255,9 @@ Run `ollama serve` and check the URL with `/doctor`.
 
 **"LM Studio is not reachable"**  
 Load a model in LM Studio and click **Start Local Server** (default port 1234).
+
+**"llama.cpp is not reachable"**  
+Make sure `llama-server` is running with `--port 8080` and check the URL with `/doctor`.
 
 **"Model not found"**  
 Use `/models` to list loaded models, `/model` to switch.
