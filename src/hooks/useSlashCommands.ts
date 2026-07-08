@@ -147,6 +147,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config llamacpp port <n>          Server port  (default 8080)',
             '  /config llamacpp autostart <on|off> Auto-launch server on startup  (default on)',
             '  /config llamacpp installdir <path> Where to auto-download binary/model  (default ~/.localcode/llamacpp)',
+            '  /config llamacpp args <flags>      Extra llama-server flags (context, threads, …) — restarts on next launch',
           ])
         } else {
           switch (sub.toLowerCase()) {
@@ -253,16 +254,25 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                     content: `llama.cpp install dir → ${llamaVal}\nTakes effect next time a binary/model needs downloading.`,
                   })
                   break
+                case 'args':
+                  cm.set({ llamaCppServer: { ...server, extraArgs: llamaVal } })
+                  addMsg({
+                    type: 'done',
+                    content: `llama.cpp extra args → ${llamaVal || '(none)'}\nRestarts the server automatically on next launch.`,
+                  })
+                  break
                 default:
                   addMsg({
                     type: 'error',
                     content:
-                      'Usage: /config llamacpp [binary <path> | model <path> | port <n> | autostart <on|off> | installdir <path>]\n' +
+                      'Usage: /config llamacpp [binary <path> | model <path> | port <n> | autostart <on|off> | installdir <path> | args <flags>]\n' +
                       `  binary     : ${server.binaryPath || '(auto-download)'}\n` +
                       `  model      : ${server.modelPath || '(auto-download)'}\n` +
                       `  port       : ${server.port || '8080'}\n` +
                       `  autostart  : ${server.autoStart === false ? 'off' : 'on'}\n` +
-                      `  installdir : ${server.installDir || '~/.localcode/llamacpp (default)'}`,
+                      `  installdir : ${server.installDir || '~/.localcode/llamacpp (default)'}\n` +
+                      `  args       : ${server.extraArgs || '(none)'}\n` +
+                      '  e.g.  /config llamacpp args -c 16384 -t 96 --numa distribute',
                   })
               }
               break
@@ -835,6 +845,7 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config llamacpp binary <path> Use your own llama-server binary',
             '  /config llamacpp model <path>  Switch model (restarts the server)',
             '  /config llamacpp installdir <path>  Where auto-downloads go (default ~/.localcode/llamacpp)',
+            '  /config llamacpp args <flags>       Extra llama-server flags (context, threads, NUMA, …)',
             '',
             '**llama.cpp auto-start**',
             '  When provider is llamacpp, LocalCode auto-launches a llama-server on',

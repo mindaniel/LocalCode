@@ -272,6 +272,7 @@ export const BUILTIN_COMMANDS = [
   { cmd: '/config llamacpp port ',       description: 'Set llama.cpp server port' },
   { cmd: '/config llamacpp autostart ',  description: 'Toggle auto-launching llama-server on startup' },
   { cmd: '/config llamacpp installdir ', description: 'Where to auto-download binary/model' },
+  { cmd: '/config llamacpp args ',       description: 'Extra llama-server flags (context, threads, NUMA, …)' },
   { cmd: '/help',                 description: 'Show help' },
   { cmd: '/lsp',                  description: 'Run diagnostics (tsc/eslint/cargo/go vet/ruff/rubocop/dotnet/…)' },
   { cmd: '/lsp hover ',           description: 'Hover info at file:line:col  (e.g. /lsp hover src/auth.ts:42:15)' },

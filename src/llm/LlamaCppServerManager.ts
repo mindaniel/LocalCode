@@ -23,6 +23,7 @@ interface ServerState {
   pid: number
   modelPath: string
   port: string
+  extraArgs: string
 }
 
 function installDirOf(server?: LlamaCppServerConfig): string {
@@ -70,11 +71,12 @@ function killPid(pid: number): void {
 
 /**
  * Ensures a llama.cpp server is reachable at the configured baseURL, serving the
- * configured model. If a server we previously spawned is running a *different*
- * model than currently configured, it is restarted with the new one. Servers we
- * don't recognize (no state file — e.g. started manually by the user) are left
- * alone and used as-is. The server is intentionally left running after LocalCode
- * exits — see README for how to stop it manually.
+ * configured model with the configured extra args (context size, threads, etc).
+ * If a server we previously spawned is running with *different* settings than
+ * currently configured, it is restarted. Servers we don't recognize (no state
+ * file — e.g. started manually by the user) are left alone and used as-is.
+ * The server is intentionally left running after LocalCode exits — see README
+ * for how to stop it manually.
  */
 export async function ensureLlamaCppRunning(
   server: LlamaCppServerConfig | undefined,
@@ -83,17 +85,24 @@ export async function ensureLlamaCppRunning(
 ): Promise<EnsureRunningResult> {
   const installDir = installDirOf(server)
   const desiredModelPath = resolveModelPath(server, installDir)
+  const desiredPort = server?.port || '8080'
+  const desiredExtraArgs = server?.extraArgs || ''
 
   onProgress?.('Checking for a running llama.cpp server…')
   const isHealthy = await provider.checkHealth(baseURL)
 
   if (isHealthy) {
     const state = readState(installDir)
-    if (!state || state.modelPath === desiredModelPath) {
-      // Either not a server we manage, or already serving the right model — leave it.
+    const matches =
+      !!state &&
+      state.modelPath === desiredModelPath &&
+      state.port === desiredPort &&
+      state.extraArgs === desiredExtraArgs
+    if (!state || matches) {
+      // Either not a server we manage, or already serving with the right settings — leave it.
       return { ok: true, alreadyRunning: true, baseURL, modelPath: state?.modelPath ?? desiredModelPath }
     }
-    onProgress?.(`Switching model → restarting llama-server with ${path.basename(desiredModelPath)}…`)
+    onProgress?.(`Config changed → restarting llama-server with ${path.basename(desiredModelPath)}…`)
     killPid(state.pid)
     await waitForHealth(baseURL, 10000, false)
   }
@@ -148,7 +157,7 @@ export async function ensureLlamaCppRunning(
       }
     }
 
-    if (child.pid) writeState(installDir, { pid: child.pid, modelPath, port })
+    if (child.pid) writeState(installDir, { pid: child.pid, modelPath, port, extraArgs: server?.extraArgs || '' })
 
     return { ok: true, alreadyRunning: false, baseURL, binaryPath, modelPath }
   } catch (e) {
