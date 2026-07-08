@@ -1,4 +1,5 @@
-import { spawn } from 'child_process'
+import { spawn, exec } from 'child_process'
+import { promisify } from 'util'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -6,6 +7,7 @@ import { LlamaCppServerConfig } from '../shared/types'
 import { LlamaCppProvider } from './providers/LlamaCppProvider'
 import { ensureLlamaServerBinary, ensureDefaultModel, defaultModelPath } from './LlamaCppDownloader'
 
+const execAsync = promisify(exec)
 const provider = new LlamaCppProvider()
 
 export interface EnsureRunningResult {
@@ -87,12 +89,57 @@ function killPid(pid: number): void {
   } catch {}
 }
 
+/** Asks the live server what model it actually has loaded (from /v1/models), independent of our own bookkeeping. */
+async function getLiveModelId(baseURL: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, { signal: AbortSignal.timeout(3000) })
+    if (!res.ok) return null
+    const json = (await res.json()) as { data?: Array<{ id: string }> }
+    return json.data?.[0]?.id ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Finds the PID of whatever's listening on a port, but only Windows for now (netstat parsing). */
+async function findListeningPid(port: string): Promise<number | null> {
+  if (process.platform !== 'win32') return null
+  try {
+    const { stdout } = await execAsync('netstat -ano -p tcp')
+    for (const line of stdout.split('\n')) {
+      if (new RegExp(`[:.]${port}\\s`).test(line) && /LISTENING/i.test(line)) {
+        const parts = line.trim().split(/\s+/)
+        const pid = parseInt(parts[parts.length - 1], 10)
+        if (!isNaN(pid)) return pid
+      }
+    }
+  } catch {}
+  return null
+}
+
+/** Confirms a PID is actually llama-server before we touch it — never kill an unidentified process. */
+async function isLlamaServerPid(pid: number): Promise<boolean> {
+  try {
+    const cmd =
+      process.platform === 'win32'
+        ? `tasklist /FI "PID eq ${pid}" /FO CSV /NH`
+        : `ps -p ${pid} -o comm=`
+    const { stdout } = await execAsync(cmd)
+    return /llama-server/i.test(stdout)
+  } catch {
+    return false
+  }
+}
+
 /**
  * Ensures a llama.cpp server is reachable at the configured baseURL, serving the
  * configured model with the configured extra args (context size, threads, etc).
- * If a server we previously spawned is running with *different* settings than
- * currently configured, it is restarted. Servers we don't recognize (no state
- * file — e.g. started manually by the user) are left alone and used as-is.
+ * The live server's /v1/models response is always checked against what's configured
+ * (not just our own state-file bookkeeping) — so a mismatch is caught and fixed even
+ * if the running server predates this tracking or its state file was lost. We only
+ * ever kill a process we've positively identified as llama-server (by PID from our
+ * own records, or by confirming the image name via tasklist/ps) — never anything
+ * merely guessed to be listening on the port.
  * The server is intentionally left running after LocalCode exits — see README
  * for how to stop it manually.
  */
@@ -114,17 +161,45 @@ export async function ensureLlamaCppRunning(
 
     if (isHealthy) {
       const state = readState(installDir)
-      const matches =
+      const stateMatches =
         !!state &&
         state.modelPath === desiredModelPath &&
         state.port === desiredPort &&
         state.extraArgs === desiredExtraArgs
-      if (!state || matches) {
-        // Either not a server we manage, or already serving with the right settings — leave it.
-        return { ok: true, alreadyRunning: true, baseURL, modelPath: state?.modelPath ?? desiredModelPath }
+
+      const liveModelId = await getLiveModelId(baseURL)
+      const liveMatches = liveModelId === null || path.basename(liveModelId) === path.basename(desiredModelPath)
+
+      if (liveMatches && (!state || stateMatches)) {
+        // Serving what we want, whether or not we recognize the process managing it.
+        return { ok: true, alreadyRunning: true, baseURL, modelPath: liveModelId ?? desiredModelPath }
       }
+
       onProgress?.(`Config changed → restarting llama-server with ${path.basename(desiredModelPath)}…`)
-      killPid(state.pid)
+      let killedSomething = false
+      if (state) {
+        killPid(state.pid)
+        killedSomething = true
+      } else {
+        const pid = await findListeningPid(desiredPort)
+        if (pid && (await isLlamaServerPid(pid))) {
+          killPid(pid)
+          killedSomething = true
+        }
+      }
+
+      if (!killedSomething) {
+        return {
+          ok: false,
+          alreadyRunning: true,
+          baseURL,
+          modelPath: liveModelId ?? undefined,
+          error:
+            `A server at ${baseURL} is serving "${liveModelId}", not the configured model ` +
+            `"${path.basename(desiredModelPath)}", and it isn't one LocalCode can safely identify/stop ` +
+            `(not llama-server, or already gone). Stop it manually, then relaunch.`,
+        }
+      }
       await waitForHealth(baseURL, 10000, false)
     }
 
