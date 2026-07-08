@@ -14,6 +14,7 @@ export interface LlamaCppServerConfig {
   binaryPath?: string     // path to llama-server(.exe); auto-downloaded if unset
   modelPath?: string      // path to a .gguf model; auto-downloaded if unset
   installDir?: string     // where to auto-download binary/model into (default ~/.localcode/llamacpp)
+  modelsDir?: string      // a folder to browse for .gguf files via /models local, e.g. your LM Studio models folder
   port?: string           // default 8080
   extraArgs?: string      // extra CLI args passed to llama-server, space-separated
 }

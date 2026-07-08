@@ -101,3 +101,41 @@ export async function ensureDefaultModel(installDir = DEFAULT_INSTALL_DIR, onPro
   await downloadToFile(DEFAULT_MODEL_URL, modelPath, (pct) => onProgress?.(`Downloading model… ${pct}`))
   return modelPath
 }
+
+/**
+ * Scans a folder (one level of subfolders deep, matching how LM Studio lays out
+ * "modelsDir/publisher/ModelName/*.gguf") for .gguf model files, so users can pick
+ * a model without typing a full path. Skips mmproj-* companion files — those are
+ * vision projectors, not standalone models. Multi-part files ("...-00002-of-...")
+ * are skipped except for part 1, since llama.cpp loads the rest automatically.
+ */
+export function scanLocalModels(modelsDir: string): string[] {
+  const found: string[] = []
+  const isUsableGguf = (name: string) => {
+    if (!name.toLowerCase().endsWith('.gguf')) return false
+    if (/^mmproj-/i.test(name)) return false
+    const part = name.match(/-(\d+)-of-\d+\.gguf$/i)
+    if (part && part[1] !== '00001') return false
+    return true
+  }
+
+  const scanDir = (dir: string) => {
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isFile() && isUsableGguf(entry.name)) found.push(full)
+    }
+  }
+
+  if (!fs.existsSync(modelsDir)) return []
+  scanDir(modelsDir)
+  for (const entry of fs.readdirSync(modelsDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) scanDir(path.join(modelsDir, entry.name))
+  }
+  return found.sort()
+}

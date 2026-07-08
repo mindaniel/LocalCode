@@ -14,7 +14,7 @@ import {
 import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 import { loadPlugins, reloadPlugin } from '../plugins/loader.js'
 import { loadAttachment, listCwdFiles } from '../shared/attachments'
-import { parseThinking } from '../shared/utils'
+import { parseThinking, extractContextSize } from '../shared/utils'
 import { Message, LLMProvider } from '../shared/types'
 import { PROVIDER_META } from '../shared/constants'
 
@@ -76,6 +76,10 @@ interface SlashCommandsOptions {
 
 let _id = 0
 const nextId = () => String(++_id)
+
+// Remembers the last `/models local` listing so `/config llamacpp model <#>` can
+// pick from it by number instead of retyping/copy-pasting a full path.
+let lastLocalModelScan: string[] = []
 
 export function useSlashCommands(opts: SlashCommandsOptions) {
   const {
@@ -142,12 +146,16 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config model <name>         Switch model',
             '  /config url <url>            Override base URL',
             '  /config temperature <val>    Set temperature  (0.0–1.0)',
+            '  /config llamacpp modelsdir <path>  Folder to browse for .gguf files (e.g. your LM Studio models folder)',
+            '  /models local                     List .gguf files found in that folder, numbered',
+            '  /config llamacpp model <path|#>    Switch model — by path, or by number from /models local',
+            '  /config llamacpp context <n>       Set context length in tokens (keeps your other flags)',
+            '  /restart                          Apply model/context/args changes without quitting',
             '  /config llamacpp binary <path>     Use your own llama-server binary',
-            '  /config llamacpp model <path>      Switch model (restarts the server)',
             '  /config llamacpp port <n>          Server port  (default 8080)',
             '  /config llamacpp autostart <on|off> Auto-launch server on startup  (default on)',
             '  /config llamacpp installdir <path> Where to auto-download binary/model  (default ~/.localcode/llamacpp)',
-            '  /config llamacpp args <flags>      Extra llama-server flags (context, threads, …) — restarts on next launch',
+            '  /config llamacpp args <flags>      Extra llama-server flags (advanced — context/threads/NUMA/etc together)',
           ])
         } else {
           switch (sub.toLowerCase()) {
@@ -223,14 +231,52 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                   cm.set({ llamaCppServer: { ...server, binaryPath: llamaVal } })
                   addMsg({ type: 'done', content: `llama.cpp binary → ${llamaVal}` })
                   break
-                case 'model':
+                case 'model': {
                   if (!llamaVal) {
-                    addMsg({ type: 'error', content: 'Usage: /config llamacpp model <path to .gguf model>' })
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp model <path to .gguf model, or a number from /models local>' })
                     break
                   }
-                  cm.set({ llamaCppServer: { ...server, modelPath: llamaVal } })
-                  addMsg({ type: 'done', content: `llama.cpp model → ${llamaVal}` })
+                  // A bare number refers to the last `/models local` listing, so you don't have to
+                  // retype/copy the full path.
+                  let modelPath = llamaVal
+                  if (/^\d+$/.test(llamaVal)) {
+                    const idx = parseInt(llamaVal, 10) - 1
+                    if (idx < 0 || idx >= lastLocalModelScan.length) {
+                      addMsg({
+                        type: 'error',
+                        content: `No model #${llamaVal} — run /models local first to see the numbered list.`,
+                      })
+                      break
+                    }
+                    modelPath = lastLocalModelScan[idx]
+                  }
+                  cm.set({ llamaCppServer: { ...server, modelPath } })
+                  addMsg({ type: 'done', content: `llama.cpp model → ${modelPath}` })
                   break
+                }
+                case 'modelsdir':
+                  if (!llamaVal) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp modelsdir <folder to browse for .gguf files>' })
+                    break
+                  }
+                  cm.set({ llamaCppServer: { ...server, modelsDir: llamaVal } })
+                  addMsg({ type: 'done', content: `llama.cpp models dir → ${llamaVal}\nRun /models local to browse it.` })
+                  break
+                case 'context': {
+                  if (!llamaVal || !/^\d+$/.test(llamaVal)) {
+                    addMsg({ type: 'error', content: 'Usage: /config llamacpp context <number of tokens>' })
+                    break
+                  }
+                  const current = server.extraArgs || ''
+                  const withoutContext = current.replace(/(^|\s)-c\s+\S+|(^|\s)--ctx-size\s+\S+/g, ' ').trim()
+                  const extraArgs = `-c ${llamaVal}${withoutContext ? ' ' + withoutContext : ''}`.trim()
+                  cm.set({ llamaCppServer: { ...server, extraArgs } })
+                  addMsg({
+                    type: 'done',
+                    content: `Context length → ${llamaVal} tokens\nOther flags kept: ${withoutContext || '(none)'}\nRun /restart to apply.`,
+                  })
+                  break
+                }
                 case 'port':
                   if (!llamaVal) {
                     addMsg({ type: 'error', content: 'Usage: /config llamacpp port <port>' })
@@ -269,14 +315,17 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                   addMsg({
                     type: 'error',
                     content:
-                      'Usage: /config llamacpp [binary <path> | model <path> | port <n> | autostart <on|off> | installdir <path> | args <flags>]\n' +
-                      `  binary     : ${server.binaryPath || '(auto-download)'}\n` +
+                      'Usage: /config llamacpp [model <path|#> | context <n> | binary <path> | port <n> | autostart <on|off> | installdir <path> | modelsdir <path> | args <flags>]\n' +
                       `  model      : ${server.modelPath || '(auto-download)'}\n` +
+                      `  context    : ${extractContextSize(server.extraArgs) ?? '(server default)'}\n` +
+                      `  binary     : ${server.binaryPath || '(auto-download)'}\n` +
                       `  port       : ${server.port || '8080'}\n` +
                       `  autostart  : ${server.autoStart === false ? 'off' : 'on'}\n` +
                       `  installdir : ${server.installDir || '~/.localcode/llamacpp (default)'}\n` +
-                      `  args       : ${server.extraArgs || '(none)'}\n` +
-                      '  e.g.  /config llamacpp args -c 16384 -t 96 --numa distribute',
+                      `  modelsdir  : ${server.modelsDir || '(not set — /config llamacpp modelsdir <path>)'}\n` +
+                      `  args       : ${server.extraArgs || '(none)'}\n\n` +
+                      '  Simple path:  /config llamacpp modelsdir "D:\\your\\models"  →  /models local  →  /config llamacpp model <#>\n' +
+                      '  Then:         /config llamacpp context 32768  →  /restart',
                   })
               }
               break
@@ -617,6 +666,39 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         return
       }
 
+      // ── /models local ────────────────────────────────────────────────────────
+      if (input === '/models local') {
+        const cfg = cm.get()
+        const modelsDir = cfg.llamaCppServer?.modelsDir
+        if (!modelsDir) {
+          addMsg({
+            type: 'error',
+            content: 'Set a folder first: /config llamacpp modelsdir "D:\\path\\to\\your\\models"',
+          })
+          cm.addHistory(input)
+          setHistory(cm.getHistory())
+          return
+        }
+        const { scanLocalModels } = await import('../llm/LlamaCppDownloader.js')
+        const found = scanLocalModels(modelsDir)
+        lastLocalModelScan = found
+        showInfo(
+          'models (local)',
+          found.length
+            ? [
+                `**Found in ${modelsDir}**`,
+                '',
+                ...found.map((p, i) => `  ${i + 1}. ${p}`),
+                '',
+                '  /config llamacpp model <#>   to select, then /restart',
+              ]
+            : [`  No .gguf files found under ${modelsDir}`],
+        )
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
       // ── /model ────────────────────────────────────────────────────────────────
       if (input === '/model') {
         setInputValue('')
@@ -890,10 +972,13 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config model <name>           Switch model',
             '  /config url <url>              Set base URL',
             '  /config temperature <val>      Set temperature (0.0–1.0)',
-            '  /config llamacpp binary <path> Use your own llama-server binary',
-            '  /config llamacpp model <path>  Switch model (restarts the server)',
-            '  /config llamacpp installdir <path>  Where auto-downloads go (default ~/.localcode/llamacpp)',
-            '  /config llamacpp args <flags>       Extra llama-server flags (context, threads, NUMA, …)',
+            '  /config llamacpp modelsdir <path>  Folder to browse for .gguf files',
+            '  /models local                      List .gguf files found there, numbered',
+            '  /config llamacpp model <path|#>    Switch model — path or number from /models local',
+            '  /config llamacpp context <n>       Set context length in tokens',
+            '  /config llamacpp binary <path>     Use your own llama-server binary',
+            '  /config llamacpp installdir <path> Where auto-downloads go (default ~/.localcode/llamacpp)',
+            '  /config llamacpp args <flags>      Advanced: raw extra llama-server flags',
             '',
             '**llama.cpp auto-start**',
             '  When provider is llamacpp, LocalCode auto-launches a llama-server on',

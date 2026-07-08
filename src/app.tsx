@@ -24,6 +24,7 @@ import {
   estimateTurnLines,
   parseThinking,
   getSuggestion,
+  extractContextSize,
 } from "./shared/utils";
 import { loadAttachment, listCwdFiles } from "./shared/attachments";
 import { globalCommandRegistry } from "./plugins/registry.js";
@@ -1007,6 +1008,12 @@ export const App: React.FC<AppProps> = ({
                       ? config.llm.model.slice(0, 24) + "…"
                       : config.llm.model}
                   </Text>
+                  {config.llm.provider === "llamacpp" && (
+                    <Text color="#6B7280">
+                      {" "}
+                      · ctx {extractContextSize(config.llamaCppServer?.extraArgs) ?? "default"}
+                    </Text>
+                  )}
                 </Box>
               </Box>
             </Box>

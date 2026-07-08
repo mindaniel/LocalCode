@@ -1,6 +1,12 @@
 import { AgentMessage } from './types'
 import { BUILTIN_COMMANDS, COMMAND_SUGGESTIONS } from './constants'
 
+/** Pulls the configured context length (tokens) out of a llama-server extra-args string, e.g. "-c 32768 -t 96". */
+export function extractContextSize(extraArgs?: string): string | null {
+  const match = (extraArgs || '').match(/(?:^|\s)(?:-c|--ctx-size)\s+(\d+)/)
+  return match ? match[1] : null
+}
+
 // ── Turn grouping ─────────────────────────────────────────────────────────────
 export type Turn =
   | { type: 'user'; content: string; timestamp: number }
