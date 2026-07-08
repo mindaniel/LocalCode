@@ -81,6 +81,11 @@ const nextId = () => String(++_id)
 // pick from it by number instead of retyping/copy-pasting a full path.
 let lastLocalModelScan: string[] = []
 
+// Proactively /compact once actual context usage (from the provider's own token
+// count) crosses this fraction of the configured context window, instead of only
+// recovering reactively after a context-overflow crash.
+const AUTO_COMPACT_THRESHOLD = 0.87
+
 export function useSlashCommands(opts: SlashCommandsOptions) {
   const {
     cwd, exit, addMsg, showInfo,
@@ -1255,10 +1260,12 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
               response,
               aborted,
               tokenCount: actualTokenCount,
+              contextTokens,
             }: {
               response: string
               aborted?: boolean
               tokenCount?: number
+              contextTokens?: number
             }) => {
               if (tokenFlushRef.current) {
                 clearTimeout(tokenFlushRef.current)
@@ -1289,6 +1296,29 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                     { role: 'assistant' as const, content: response },
                   ].slice(-60),
                 )
+
+                // Proactive auto-compact: if this turn's actual context usage (prompt + completion,
+                // straight from the provider) is already close to the configured context window,
+                // compact now instead of waiting to crash into the limit.
+                const cfg = cm.get()
+                const maxContext =
+                  cfg.llm.provider === 'llamacpp'
+                    ? extractContextSize(cfg.llamaCppServer?.extraArgs)
+                    : null
+                if (maxContext && contextTokens && !crashCompactRef.current) {
+                  const ratio = contextTokens / parseInt(maxContext, 10)
+                  if (ratio >= AUTO_COMPACT_THRESHOLD) {
+                    crashCompactRef.current = true
+                    addMsg({
+                      type: 'text',
+                      content: `> [auto-compact — context ${Math.round(ratio * 100)}% full]`,
+                    })
+                    setTimeout(() => {
+                      crashCompactRef.current = false
+                      handleSubmit('/compact')
+                    }, 400)
+                  }
+                }
               }
               if (!aborted && taskQueueRef.current.length > 0) {
                 const next = taskQueueRef.current.shift()!

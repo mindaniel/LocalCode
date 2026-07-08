@@ -116,7 +116,7 @@ export class AgentRuntime extends EventEmitter {
           fullResponse += token
         })
         fullResponse = result.response || fullResponse
-        this.emit('done', { response: fullResponse, tokenCount: result.totalTokens })
+        this.emit('done', { response: fullResponse, tokenCount: result.totalTokens, contextTokens: result.totalTokens })
       } catch (err) {
         this.emit('error', friendlyLLMError(err, config.llm))
         this.emit('done', { response: '' })
@@ -208,7 +208,7 @@ export class AgentRuntime extends EventEmitter {
 
       if (!toolCall) {
         const clean = extractDoneSummary(fullResponse)
-        this.emit('done', { response: clean, tokenCount: accumulatedTokens || undefined })
+        this.emit('done', { response: clean, tokenCount: accumulatedTokens || undefined, contextTokens: iterTokens })
         return
       }
 
@@ -293,7 +293,7 @@ export class AgentRuntime extends EventEmitter {
             messages.push(toolMsg)
             if (fullResponse.includes('DONE:')) {
               const summary = extractDoneSummary(fullResponse)
-              if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined }); return }
+              if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined, contextTokens: iterTokens }); return }
             }
             continue
           }
@@ -342,11 +342,11 @@ export class AgentRuntime extends EventEmitter {
 
       if (fullResponse.includes('DONE:')) {
         const summary = extractDoneSummary(fullResponse)
-        if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined }); return }
+        if (summary) { this.emit('done', { response: summary, tokenCount: accumulatedTokens || undefined, contextTokens: iterTokens }); return }
       }
     }
 
-    this.emit('done', { response: 'Reached maximum iteration limit.', tokenCount: accumulatedTokens || undefined })
+    this.emit('done', { response: 'Reached maximum iteration limit.', tokenCount: accumulatedTokens || undefined, contextTokens: iterTokens })
   }
 
   private waitForConfirmation(): Promise<{ confirmed: boolean; timedOut: boolean; trustFolder: boolean }> {
