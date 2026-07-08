@@ -49,9 +49,27 @@ function writeState(installDir: string, state: ServerState): void {
   } catch {}
 }
 
+/** Throws if a model path was explicitly configured but doesn't exist, rather than silently
+ *  falling back to the auto-downloaded default — a wrong/mistyped path should be a loud error. */
 function resolveModelPath(server: LlamaCppServerConfig | undefined, installDir: string): string {
-  if (server?.modelPath && fs.existsSync(server.modelPath)) return server.modelPath
+  if (server?.modelPath) {
+    if (!fs.existsSync(server.modelPath)) {
+      throw new Error(`Configured model not found: ${server.modelPath}`)
+    }
+    return server.modelPath
+  }
   return defaultModelPath(installDir)
+}
+
+/** Same principle for an explicitly configured binary path. */
+function resolveBinaryPath(server: LlamaCppServerConfig | undefined): string | undefined {
+  if (server?.binaryPath) {
+    if (!fs.existsSync(server.binaryPath)) {
+      throw new Error(`Configured llama-server binary not found: ${server.binaryPath}`)
+    }
+    return server.binaryPath
+  }
+  return undefined
 }
 
 async function waitForHealth(baseURL: string, timeoutMs: number, expectHealthy: boolean): Promise<boolean> {
@@ -84,48 +102,45 @@ export async function ensureLlamaCppRunning(
   onProgress?: ProgressCallback,
 ): Promise<EnsureRunningResult> {
   const installDir = installDirOf(server)
-  const desiredModelPath = resolveModelPath(server, installDir)
-  const desiredPort = server?.port || '8080'
-  const desiredExtraArgs = server?.extraArgs || ''
-
-  onProgress?.('Checking for a running llama.cpp server…')
-  const isHealthy = await provider.checkHealth(baseURL)
-
-  if (isHealthy) {
-    const state = readState(installDir)
-    const matches =
-      !!state &&
-      state.modelPath === desiredModelPath &&
-      state.port === desiredPort &&
-      state.extraArgs === desiredExtraArgs
-    if (!state || matches) {
-      // Either not a server we manage, or already serving with the right settings — leave it.
-      return { ok: true, alreadyRunning: true, baseURL, modelPath: state?.modelPath ?? desiredModelPath }
-    }
-    onProgress?.(`Config changed → restarting llama-server with ${path.basename(desiredModelPath)}…`)
-    killPid(state.pid)
-    await waitForHealth(baseURL, 10000, false)
-  }
-
-  if (server?.autoStart === false) {
-    return {
-      ok: false,
-      alreadyRunning: false,
-      baseURL,
-      error: 'No llama.cpp server reachable and autoStart is disabled.',
-    }
-  }
 
   try {
-    const binaryPath =
-      server?.binaryPath && fs.existsSync(server.binaryPath)
-        ? server.binaryPath
-        : await ensureLlamaServerBinary(installDir, onProgress)
+    const desiredModelPath = resolveModelPath(server, installDir)
+    resolveBinaryPath(server) // throws early if configured but missing
+    const desiredPort = server?.port || '8080'
+    const desiredExtraArgs = server?.extraArgs || ''
 
-    const modelPath =
-      server?.modelPath && fs.existsSync(server.modelPath)
-        ? server.modelPath
-        : await ensureDefaultModel(installDir, onProgress)
+    onProgress?.('Checking for a running llama.cpp server…')
+    const isHealthy = await provider.checkHealth(baseURL)
+
+    if (isHealthy) {
+      const state = readState(installDir)
+      const matches =
+        !!state &&
+        state.modelPath === desiredModelPath &&
+        state.port === desiredPort &&
+        state.extraArgs === desiredExtraArgs
+      if (!state || matches) {
+        // Either not a server we manage, or already serving with the right settings — leave it.
+        return { ok: true, alreadyRunning: true, baseURL, modelPath: state?.modelPath ?? desiredModelPath }
+      }
+      onProgress?.(`Config changed → restarting llama-server with ${path.basename(desiredModelPath)}…`)
+      killPid(state.pid)
+      await waitForHealth(baseURL, 10000, false)
+    }
+
+    if (server?.autoStart === false) {
+      return {
+        ok: false,
+        alreadyRunning: false,
+        baseURL,
+        error: 'No llama.cpp server reachable and autoStart is disabled.',
+      }
+    }
+
+    const binaryPath = resolveBinaryPath(server) ?? (await ensureLlamaServerBinary(installDir, onProgress))
+    // desiredModelPath was already validated above when explicitly configured; only the
+    // no-config default case still needs to actually trigger the download.
+    const modelPath = server?.modelPath ? desiredModelPath : await ensureDefaultModel(installDir, onProgress)
 
     const port = server?.port || '8080'
     const args = [

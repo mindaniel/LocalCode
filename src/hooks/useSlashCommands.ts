@@ -880,7 +880,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /plugin reload                 Reload all plugins',
           ])
           break
-        case 'doctor': {
+        case 'doctor':
+        case '/doctor': {
           showInfo('doctor', ['  Checking…'])
           const cfg = cm.get()
           const meta = PROVIDER_META[cfg.llm.provider]
@@ -896,7 +897,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
           ])
           break
         }
-        case 'models': {
+        case 'models':
+        case '/models': {
           showInfo('models', ['  Loading…'])
           const cfg = cm.get()
           const meta = PROVIDER_META[cfg.llm.provider]
