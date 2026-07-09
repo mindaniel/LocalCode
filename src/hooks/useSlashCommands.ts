@@ -15,7 +15,7 @@ import { globalRegistry, globalCommandRegistry } from '../plugins/registry.js'
 import { loadPlugins, reloadPlugin } from '../plugins/loader.js'
 import { loadAttachment, listCwdFiles } from '../shared/attachments'
 import { parseThinking, extractContextSize } from '../shared/utils'
-import { Message, LLMProvider } from '../shared/types'
+import { Message, LLMProvider, LlamaCppServerConfig } from '../shared/types'
 import { PROVIDER_META } from '../shared/constants'
 
 interface ConfirmRequest {
@@ -156,6 +156,16 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /config llamacpp model <path|#>    Switch model — by path, or by number from /models local',
             '  /config llamacpp context <n>       Set context length in tokens (keeps your other flags)',
             '  /restart                          Apply model/context/args changes without quitting',
+            '',
+            '  Multiple models at once (each on its own port):',
+            '  /config llamacpp agent <name> model <path|#>  Configure a named agent',
+            '  /config llamacpp agent <name> port <n>        (default 8080 if unset)',
+            '  /config llamacpp agent <name> context <n>     Context length for that agent',
+            '  /use <name>                                   Start it (if needed) and switch to it',
+            '  /agents                                       List agents — running/stopped, active one',
+            '  /agents stop <name>                            Stop a running agent',
+            '  /agents remove <name>                          Remove from config',
+            '',
             '  /config llamacpp binary <path>     Use your own llama-server binary',
             '  /config llamacpp port <n>          Server port  (default 8080)',
             '  /config llamacpp autostart <on|off> Auto-launch server on startup  (default on)',
@@ -316,11 +326,71 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
                     content: `llama.cpp extra args → ${llamaVal || '(none)'}\nRestarts the server automatically on next launch.`,
                   })
                   break
+                case 'agent': {
+                  // /config llamacpp agent <name> <model|port|context|args|binary> <value>
+                  const [agentName, agentProp, ...agentRest] = llamaVal.split(/\s+/)
+                  const agentPropVal = stripQuotes(agentRest.join(' ').trim())
+                  if (!agentName || !agentProp) {
+                    addMsg({
+                      type: 'error',
+                      content:
+                        'Usage: /config llamacpp agent <name> [model <path|#> | port <n> | context <n> | args <flags> | binary <path>]',
+                    })
+                    break
+                  }
+                  const agents = cm.get().llamaCppAgents ?? {}
+                  const agent = agents[agentName] ?? {}
+                  const setAgent = (updates: Partial<LlamaCppServerConfig>) => {
+                    cm.set({ llamaCppAgents: { ...agents, [agentName]: { ...agent, ...updates } } })
+                  }
+                  switch (agentProp.toLowerCase()) {
+                    case 'model': {
+                      let modelPath = agentPropVal
+                      if (/^\d+$/.test(agentPropVal)) {
+                        const idx = parseInt(agentPropVal, 10) - 1
+                        if (idx < 0 || idx >= lastLocalModelScan.length) {
+                          addMsg({ type: 'error', content: `No model #${agentPropVal} — run /models local first.` })
+                          break
+                        }
+                        modelPath = lastLocalModelScan[idx]
+                      }
+                      setAgent({ modelPath })
+                      addMsg({ type: 'done', content: `Agent "${agentName}" model → ${modelPath}` })
+                      break
+                    }
+                    case 'port':
+                      setAgent({ port: agentPropVal })
+                      addMsg({ type: 'done', content: `Agent "${agentName}" port → ${agentPropVal}` })
+                      break
+                    case 'context': {
+                      const current = agent.extraArgs || ''
+                      const withoutContext = current.replace(/(^|\s)-c\s+\S+|(^|\s)--ctx-size\s+\S+/g, ' ').trim()
+                      const extraArgs = `-c ${agentPropVal}${withoutContext ? ' ' + withoutContext : ''}`.trim()
+                      setAgent({ extraArgs })
+                      addMsg({ type: 'done', content: `Agent "${agentName}" context → ${agentPropVal}` })
+                      break
+                    }
+                    case 'args':
+                      setAgent({ extraArgs: agentPropVal })
+                      addMsg({ type: 'done', content: `Agent "${agentName}" args → ${agentPropVal || '(none)'}` })
+                      break
+                    case 'binary':
+                      setAgent({ binaryPath: agentPropVal })
+                      addMsg({ type: 'done', content: `Agent "${agentName}" binary → ${agentPropVal}` })
+                      break
+                    default:
+                      addMsg({
+                        type: 'error',
+                        content: 'Usage: /config llamacpp agent <name> [model <path|#> | port <n> | context <n> | args <flags> | binary <path>]',
+                      })
+                  }
+                  break
+                }
                 default:
                   addMsg({
                     type: 'error',
                     content:
-                      'Usage: /config llamacpp [model <path|#> | context <n> | binary <path> | port <n> | autostart <on|off> | installdir <path> | modelsdir <path> | args <flags>]\n' +
+                      'Usage: /config llamacpp [model <path|#> | context <n> | binary <path> | port <n> | autostart <on|off> | installdir <path> | modelsdir <path> | args <flags> | agent <name> ...]\n' +
                       `  model      : ${server.modelPath || '(auto-download)'}\n` +
                       `  context    : ${extractContextSize(server.extraArgs) ?? '(server default)'}\n` +
                       `  binary     : ${server.binaryPath || '(auto-download)'}\n` +
@@ -671,6 +741,128 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
         return
       }
 
+      // ── /agents ───────────────────────────────────────────────────────────────
+      // Named llama.cpp server profiles that can run concurrently, one per port —
+      // e.g. a big model for coding on :8080, a small fast one for quick chat on :8081.
+      if (input === '/agents' || input.startsWith('/agents ')) {
+        const rest = input.slice(7).trim()
+        const [sub, ...rest2] = rest.split(/\s+/)
+        const arg = rest2.join(' ').trim()
+        const cfg = cm.get()
+        const agents = cfg.llamaCppAgents ?? {}
+        const { checkAgentStatus } = await import('../llm/LlamaCppServerManager.js')
+
+        if (!sub) {
+          const names = Object.keys(agents)
+          if (names.length === 0) {
+            showInfo('agents', [
+              '  No agents configured yet.',
+              '',
+              '  /config llamacpp agent <name> model <path|#>   Configure one',
+              '  /config llamacpp agent <name> port <n>         (default 8080 if unset)',
+              '  /use <name>                                    Start it and switch to it',
+            ])
+            cm.addHistory(input)
+            setHistory(cm.getHistory())
+            return
+          }
+          showInfo('agents', ['  Checking…'])
+          const lines: string[] = ['**Agents**', '']
+          for (const name of names) {
+            const a = agents[name]
+            const port = a.port || '8080'
+            const baseURL = `http://localhost:${port}/v1`
+            const status = await checkAgentStatus(baseURL)
+            const isActive = cfg.llm.provider === 'llamacpp' && cfg.llm.baseURL === baseURL
+            const modelLabel = status.modelId
+              ? status.modelId.split(/[\\/]/).pop()
+              : a.modelPath
+                ? a.modelPath.split(/[\\/]/).pop()
+                : '(auto-download)'
+            lines.push(
+              `  ${isActive ? '▶' : ' '} ${name.padEnd(14)} :${port}  ${status.healthy ? '✓ running' : '· stopped'}  ${modelLabel}`,
+            )
+          }
+          lines.push('', '  /use <name>          Start (if needed) and switch to it', '  /agents stop <name>  Stop a running agent', '  /agents remove <name>  Remove from config')
+          showInfo('agents', lines)
+        } else if (sub === 'stop') {
+          if (!arg) {
+            addMsg({ type: 'error', content: 'Usage: /agents stop <name>' })
+          } else if (!agents[arg]) {
+            addMsg({ type: 'error', content: `No agent named "${arg}".` })
+          } else {
+            const { stopAgentServer } = await import('../llm/LlamaCppServerManager.js')
+            const result = await stopAgentServer(agents[arg], arg)
+            addMsg(
+              result.ok
+                ? { type: 'done', content: `Agent "${arg}" stopped.` }
+                : { type: 'error', content: result.error ?? 'Failed to stop.' },
+            )
+          }
+        } else if (sub === 'remove') {
+          if (!arg) {
+            addMsg({ type: 'error', content: 'Usage: /agents remove <name>' })
+          } else if (!agents[arg]) {
+            addMsg({ type: 'error', content: `No agent named "${arg}".` })
+          } else {
+            const { [arg]: _removed, ...rest3 } = agents
+            cm.set({ llamaCppAgents: rest3 })
+            addMsg({ type: 'done', content: `Agent "${arg}" removed from config (stop it separately first if it's running: /agents stop ${arg}).` })
+          }
+        } else {
+          addMsg({ type: 'error', content: 'Usage: /agents [list] | stop <name> | remove <name>' })
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
+      // ── /use <name> ───────────────────────────────────────────────────────────
+      if (input.startsWith('/use ')) {
+        const name = input.slice(5).trim()
+        const cfg = cm.get()
+        const agents = cfg.llamaCppAgents ?? {}
+        const agent = agents[name]
+        if (!agent) {
+          addMsg({
+            type: 'error',
+            content: `No agent named "${name}". Configure one first:\n  /config llamacpp agent ${name} model <path|#>`,
+          })
+          cm.addHistory(input)
+          setHistory(cm.getHistory())
+          return
+        }
+        const port = agent.port || '8080'
+        const baseURL = `http://localhost:${port}/v1`
+        setAgentStatus('thinking')
+        const progressLines: string[] = []
+        showInfo('llama.cpp', [`Switching to "${name}"…`])
+        const { ensureLlamaCppRunning } = await import('../llm/LlamaCppServerManager.js')
+        const result = await ensureLlamaCppRunning(agent, baseURL, (msg) => {
+          progressLines.push(msg)
+          showInfo('llama.cpp', progressLines)
+        }, name)
+        setAgentStatus('idle')
+
+        if (result.ok) {
+          const { basename } = await import('path')
+          const modelName = result.modelPath ? basename(result.modelPath) : agent.modelPath ? basename(agent.modelPath) : name
+          cm.set({
+            llamaCppAgents: {
+              ...agents,
+              [name]: { ...agent, binaryPath: result.binaryPath ?? agent.binaryPath, modelPath: result.modelPath ?? agent.modelPath, port },
+            },
+          })
+          cm.setLLM({ provider: 'llamacpp', baseURL, model: modelName })
+          showInfo('llama.cpp', [...progressLines, `✓ Now using "${name}" — ${modelName} at ${baseURL}`])
+        } else {
+          showInfo('llama.cpp', [...progressLines, `✗ ${result.error}`])
+        }
+        cm.addHistory(input)
+        setHistory(cm.getHistory())
+        return
+      }
+
       // ── /models local ────────────────────────────────────────────────────────
       if (input === '/models local') {
         const cfg = cm.get()
@@ -968,6 +1160,8 @@ export function useSlashCommands(opts: SlashCommandsOptions) {
             '  /connect                       Connect to server (popup)',
             '  /model                         Select model (popup)',
             '  /restart                       Restart the managed llama.cpp server with current config',
+            '  /use <name>                    Switch to a named agent (starts it if needed)',
+            '  /agents                        List configured agents — running/stopped, which is active',
             '',
             '**Configuration**',
             '  /config                        Show current configuration',

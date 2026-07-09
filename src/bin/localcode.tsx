@@ -102,20 +102,41 @@ async function ensureLocalServer(): Promise<void> {
 
   const { ensureLlamaCppRunning } = await import('../llm/LlamaCppServerManager.js')
   const baseURL = cfg.llm.baseURL || 'http://localhost:8080/v1'
-  const result = await ensureLlamaCppRunning(cfg.llamaCppServer, baseURL, (msg) => {
+
+  // If the active connection points at a named agent (from /use <name>), ensure that
+  // agent specifically, keyed by its own state file — not the legacy single-server config.
+  const agents = cfg.llamaCppAgents ?? {}
+  const activeAgentName = Object.keys(agents).find((n) => `http://localhost:${agents[n].port || '8080'}/v1` === baseURL)
+  const server = activeAgentName ? agents[activeAgentName] : cfg.llamaCppServer
+  const stateKey = activeAgentName ?? 'default'
+
+  const result = await ensureLlamaCppRunning(server, baseURL, (msg) => {
     process.stdout.write(`${chalk.gray('[localcode]')} ${msg}\n`)
-  })
+  }, stateKey)
 
   if (result.ok) {
     const { basename } = await import('path')
     const modelName = result.modelPath ? basename(result.modelPath) : undefined
-    cm.set({
-      llamaCppServer: {
-        ...cfg.llamaCppServer,
-        binaryPath: result.binaryPath ?? cfg.llamaCppServer?.binaryPath,
-        modelPath: result.modelPath ?? cfg.llamaCppServer?.modelPath,
-      },
-    })
+    if (activeAgentName) {
+      cm.set({
+        llamaCppAgents: {
+          ...agents,
+          [activeAgentName]: {
+            ...server,
+            binaryPath: result.binaryPath ?? server?.binaryPath,
+            modelPath: result.modelPath ?? server?.modelPath,
+          },
+        },
+      })
+    } else {
+      cm.set({
+        llamaCppServer: {
+          ...cfg.llamaCppServer,
+          binaryPath: result.binaryPath ?? cfg.llamaCppServer?.binaryPath,
+          modelPath: result.modelPath ?? cfg.llamaCppServer?.modelPath,
+        },
+      })
+    }
     if (modelName && modelName !== cfg.llm.model) {
       cm.setLLM({ model: modelName })
     }

@@ -32,22 +32,27 @@ function installDirOf(server?: LlamaCppServerConfig): string {
   return server?.installDir || path.join(os.homedir(), '.localcode', 'llamacpp')
 }
 
-function stateFilePath(installDir: string): string {
-  return path.join(installDir, 'server-state.json')
+// stateKey namespaces the state file per named agent, so multiple concurrent
+// servers (one per agent) each get their own PID/model bookkeeping instead of
+// clobbering a single shared file. The unnamed single-server flow keeps using
+// "default" so existing configs keep working unchanged.
+function stateFilePath(installDir: string, stateKey: string): string {
+  const suffix = stateKey === 'default' ? '' : `-${stateKey}`
+  return path.join(installDir, `server-state${suffix}.json`)
 }
 
-function readState(installDir: string): ServerState | null {
+function readState(installDir: string, stateKey: string): ServerState | null {
   try {
-    return JSON.parse(fs.readFileSync(stateFilePath(installDir), 'utf-8'))
+    return JSON.parse(fs.readFileSync(stateFilePath(installDir, stateKey), 'utf-8'))
   } catch {
     return null
   }
 }
 
-function writeState(installDir: string, state: ServerState): void {
+function writeState(installDir: string, stateKey: string, state: ServerState): void {
   try {
     fs.mkdirSync(installDir, { recursive: true })
-    fs.writeFileSync(stateFilePath(installDir), JSON.stringify(state, null, 2))
+    fs.writeFileSync(stateFilePath(installDir, stateKey), JSON.stringify(state, null, 2))
   } catch {}
 }
 
@@ -157,6 +162,7 @@ export async function ensureLlamaCppRunning(
   server: LlamaCppServerConfig | undefined,
   baseURL: string,
   onProgress?: ProgressCallback,
+  stateKey = 'default',
 ): Promise<EnsureRunningResult> {
   const installDir = installDirOf(server)
 
@@ -170,7 +176,7 @@ export async function ensureLlamaCppRunning(
     const isHealthy = await provider.checkHealth(baseURL)
 
     if (isHealthy) {
-      const state = readState(installDir)
+      const state = readState(installDir, stateKey)
       const stateMatches =
         !!state &&
         state.modelPath === desiredModelPath &&
@@ -257,10 +263,37 @@ export async function ensureLlamaCppRunning(
       }
     }
 
-    if (child.pid) writeState(installDir, { pid: child.pid, modelPath, port, extraArgs: server?.extraArgs || '' })
+    if (child.pid) writeState(installDir, stateKey, { pid: child.pid, modelPath, port, extraArgs: server?.extraArgs || '' })
 
     return { ok: true, alreadyRunning: false, baseURL, binaryPath, modelPath }
   } catch (e) {
     return { ok: false, alreadyRunning: false, baseURL, error: String(e) }
   }
+}
+
+/** Stops a specific named agent's server — only the process we recorded starting it, nothing else. */
+export async function stopAgentServer(
+  server: LlamaCppServerConfig | undefined,
+  stateKey: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const installDir = installDirOf(server)
+  const state = readState(installDir, stateKey)
+  if (!state) return { ok: false, error: `No record of a server started for "${stateKey}".` }
+  if (!(await isLlamaServerPid(state.pid))) {
+    return { ok: false, error: `PID ${state.pid} is no longer llama-server — already stopped?` }
+  }
+  killPid(state.pid)
+  try {
+    fs.unlinkSync(stateFilePath(installDir, stateKey))
+  } catch {}
+  return { ok: true }
+}
+
+/** Live health + model check for a named agent, without starting or changing anything. */
+export async function checkAgentStatus(
+  baseURL: string,
+): Promise<{ healthy: boolean; modelId: string | null }> {
+  const healthy = await provider.checkHealth(baseURL)
+  const modelId = healthy ? await getLiveModelId(baseURL) : null
+  return { healthy, modelId }
 }

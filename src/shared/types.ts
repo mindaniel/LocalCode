@@ -57,6 +57,10 @@ export interface ToolResult {
 export interface AppConfig {
   llm: LLMConfig
   llamaCppServer?: LlamaCppServerConfig
+  // Named llama.cpp server profiles, each independently startable/stoppable on its own
+  // port — lets multiple models run concurrently (e.g. one for coding, one for quick
+  // chat). Switch which one the active session talks to with /use <name>.
+  llamaCppAgents?: Record<string, LlamaCppServerConfig>
   theme: 'dark'
   fontSize: number
   shell: string
