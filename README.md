@@ -7,10 +7,11 @@
 **An AI coding agent that runs entirely in your terminal — no cloud account required.**  
 Point it at a local model (Ollama, LM Studio, or llama.cpp) and start building. With llama.cpp, LocalCode can auto-download and auto-start the server for you, run multiple models at once on separate ports, and proactively manage context so long agentic sessions don't run out of room.
 
-![npm](https://img.shields.io/npm/v/localcode-agent)
 ![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue)
 ![License](https://img.shields.io/badge/license-MIT-brightgreen)
+
+> This is an actively-developed fork with substantial changes beyond the original project — most notably full llama.cpp support (auto-download, auto-start, multi-agent, proactive context management). It isn't published to npm, so install from source (below).
 
 ---
 
@@ -23,21 +24,73 @@ LocalCode is an autonomous AI coding agent with a keyboard-driven terminal UI. D
 ## Requirements
 
 - **Node.js 18+** — [nodejs.org](https://nodejs.org)
-- A running **local LLM server** — Ollama, LM Studio, or llama.cpp (`llama-server`)
+- A running **local LLM server** — Ollama, LM Studio, or llama.cpp (LocalCode can auto-install & auto-start llama.cpp for you — see [Local llama.cpp management](#local-llamacpp-management))
 
 ---
 
 ## Install
 
+Build from source and link it globally — this fork isn't published to npm:
+
 ```bash
-npm install -g localcode-agent
+git clone https://github.com/mindaniel/LocalCode.git
+cd LocalCode
+npm install
+npm run build
+npm link
 ```
 
-Then run it inside any project:
+`npm link` registers the `localcode` command globally, pointed at this local checkout — no npm registry publish involved. Then run it inside any project:
 
 ```bash
 localcode
 ```
+
+**Updating later:**
+
+```bash
+git pull
+npm install
+npm run build
+```
+
+(`npm link` only needs to run once — rebuilding overwrites the same linked file, so the global `localcode` command picks up changes automatically.)
+
+**No admin rights on the machine?** See [Installing without admin rights](#installing-without-admin-rights) below — everything can live under your own user profile.
+
+---
+
+## Installing without admin rights
+
+Everything above can be done inside your own user profile — no elevation needed, on a locked-down server or otherwise:
+
+**1. Get a portable Node.js** — the `.zip` build (not the `.msi` installer) from [nodejs.org](https://nodejs.org/en/download):
+
+```powershell
+Expand-Archive node-vXX.X.X-win-x64.zip -DestinationPath "$env:USERPROFILE\tools\node"
+setx PATH "$env:PATH;$env:USERPROFILE\tools\node\node-vXX.X.X-win-x64"
+```
+
+(`setx` without `/M` only ever touches your *user* environment variables — never needs admin.)
+
+**2. Point npm's global installs at a folder you own** — by default `npm link`/`npm install -g` try to write under `Program Files`, which does need admin:
+
+```powershell
+npm config set prefix "$env:USERPROFILE\.npm-global"
+setx PATH "$env:PATH;$env:USERPROFILE\.npm-global"
+```
+
+**3. Clone and build as usual**, from inside your own profile:
+
+```powershell
+git clone https://github.com/mindaniel/LocalCode.git "$env:USERPROFILE\localcode"
+cd "$env:USERPROFILE\localcode"
+npm install
+npm run build
+npm link
+```
+
+`npm link` now writes into `%USERPROFILE%\.npm-global`, not a system folder, so no elevation prompt appears at any step. Open a fresh terminal after step 1/2 so the `PATH` changes take effect, then verify with `localcode --help`.
 
 ---
 
