@@ -5,7 +5,7 @@
 # ⚡ LocalCode
 
 **An AI coding agent that runs entirely in your terminal — no cloud account required.**  
-Point it at a local model (Ollama, LM Studio, or llama.cpp) and start building.
+Point it at a local model (Ollama, LM Studio, or llama.cpp) and start building. With llama.cpp, LocalCode can auto-download and auto-start the server for you, run multiple models at once on separate ports, and proactively manage context so long agentic sessions don't run out of room.
 
 ![npm](https://img.shields.io/npm/v/localcode-agent)
 ![Node.js](https://img.shields.io/badge/Node.js-18%2B-green)
@@ -55,10 +55,10 @@ ollama pull deepseek-coder
 
 **LM Studio** — download from [lmstudio.ai](https://lmstudio.ai), load a model, click **Start Local Server**.
 
-**llama.cpp** — build or install [llama.cpp](https://github.com/ggml-org/llama.cpp), then run its OpenAI-compatible server:
+**llama.cpp** — no setup needed. Just switch the provider and LocalCode handles the rest (see [Local llama.cpp management](#local-llamacpp-management) below):
 
-```bash
-llama-server -m ./models/your-model.gguf --port 8080
+```
+/config provider llamacpp
 ```
 
 ---
@@ -78,6 +78,60 @@ localcode explain the architecture of this project
 ```
 
 Or just open the TUI and type naturally.
+
+---
+
+## Local llama.cpp management
+
+When the provider is `llamacpp`, LocalCode manages the server for you — no separate terminal, no manual `llama-server` command.
+
+### Zero-setup auto-start
+
+```
+/config provider llamacpp
+```
+
+On every launch, LocalCode checks whether a server is already reachable. If not, it auto-downloads a prebuilt `llama-server` binary for your OS/arch (from the official [llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases)) plus a small default model (Qwen2.5-0.5B) on first use, then starts it — no model, no binary, no manual setup required. Everything lands under `~/.localcode/llamacpp/`.
+
+The server is started **detached** — it keeps running after you quit LocalCode, so the next launch reuses the already-warm process instead of reloading the model from scratch.
+
+### Using your own models
+
+```
+/config llamacpp modelsdir "D:\path\to\your\models"     # e.g. an LM Studio models folder
+/models local                                            # lists every .gguf found, numbered
+/config llamacpp model 2                                 # pick by number — or pass a full path directly
+/config llamacpp context 32768                            # set context length (keeps other flags)
+/config llamacpp args -t 96 --numa distribute             # advanced: raw llama-server flags
+/restart                                                   # apply changes without quitting the TUI
+```
+
+`/models local` skips `mmproj-*` vision-projector files and only picks part `00001` of a multi-part split `.gguf` — llama.cpp loads the rest automatically. Changing the model, port, or args and running `/restart` (or just relaunching) safely restarts the managed server — it checks what the live server is *actually* serving before touching anything, and only ever stops a process it has positively identified as `llama-server`.
+
+### Multiple models at once
+
+Run several models concurrently, each on its own port, and switch between them — e.g. a large model for coding, a small fast one for quick questions:
+
+```
+/config llamacpp agent coding model "D:\models\Qwen3.6-35B-A3B-Q4_K_M.gguf"
+/config llamacpp agent coding port 8080
+/config llamacpp agent coding context 32768
+
+/config llamacpp agent quick model "D:\models\Ministral-3B-Instruct.gguf"
+/config llamacpp agent quick port 8081
+
+/use coding      # starts it if needed, points the active session at it
+/use quick        # switches without stopping "coding" in the background
+/agents           # lists all agents — running/stopped, active one marked ▶
+/agents stop quick
+/agents remove quick
+```
+
+### Reliability
+
+- **Prompt caching** — requests set `cache_prompt: true`, so llama-server reuses the KV cache for the unchanged conversation prefix between turns instead of reprocessing the whole growing history from scratch on every agent iteration.
+- **Idle timeout** — if a request genuinely stalls (CPU contention, an oversized context) with no new data for 15 minutes, it aborts with a clear error instead of hanging silently forever. This is an idle timeout, not a hard deadline, so a large context that's still legitimately making progress isn't cut off.
+- **Configured-but-missing paths fail loudly** — a typo'd `/config llamacpp model` path errors immediately instead of silently falling back to the default model.
 
 ---
 
@@ -114,7 +168,11 @@ Type `/` to open the searchable command picker.
 | `/connect` | Open the server connection popup |
 | `/model` | Pick a model (searchable popup) |
 | `/models` | List all available models |
+| `/models local` | List `.gguf` files found in your configured models folder, numbered (llama.cpp) |
 | `/doctor` | Check server connectivity and config |
+| `/restart` | Re-apply llama.cpp model/context/args changes without quitting |
+| `/use <name>` | Switch to a named llama.cpp agent, starting it if needed |
+| `/agents` | List configured llama.cpp agents — running/stopped, which is active |
 | `/trust <path>` | Trust a folder — auto-approve all write ops inside it |
 | `/trust` | List all trusted paths |
 | `/trust remove <path>` | Remove trust from a folder |
@@ -125,6 +183,7 @@ Type `/` to open the searchable command picker.
 | `/config model <name>` | Set the active model |
 | `/config url <url>` | Override the server base URL |
 | `/config temperature <0–1>` | Adjust model temperature |
+| `/config llamacpp ...` | Configure the managed llama.cpp server — see [Local llama.cpp management](#local-llamacpp-management) |
 | `/attach` | Attach a file or image to your message |
 | `/compact` | Summarize and compress the conversation history |
 | `/session save <name>` | Save the current session |
@@ -185,7 +244,9 @@ The agent reads entire files. For large files it shows the total line count and 
 
 ## Conversation history & context
 
-The last 20 turns (40 messages) are kept in context and sent to the model each iteration. Use `/compact` to summarize and free up context when working on long tasks.
+The last 60 messages are kept in context and sent to the model each iteration. Use `/compact` to summarize and free up context anytime.
+
+**Proactive auto-compact** (llama.cpp, when a context length is configured via `/config llamacpp context <n>`): each turn's actual token usage — reported directly by the provider, not an estimate — is checked against your configured context size. Crossing 87% triggers `/compact` automatically before things break, instead of only recovering after a request already crashed from exceeding the context window.
 
 ---
 
@@ -204,10 +265,18 @@ It connects automatically to Discord if it is running. No setup needed for users
 ```json
 {
   "llm": {
-    "provider": "ollama",
-    "model": "deepseek-coder:latest",
-    "baseURL": "http://localhost:11434",
+    "provider": "llamacpp",
+    "model": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    "baseURL": "http://localhost:8080/v1",
     "temperature": 0.1
+  },
+  "llamaCppServer": {
+    "modelPath": "D:\\models\\your-model.gguf",
+    "modelsDir": "D:\\models",
+    "extraArgs": "-c 32768 -t 96 --numa distribute"
+  },
+  "llamaCppAgents": {
+    "quick": { "modelPath": "D:\\models\\small-model.gguf", "port": "8081" }
   },
   "trustedPaths": [
     "/home/user/projects/myapp"
@@ -257,7 +326,13 @@ Run `ollama serve` and check the URL with `/doctor`.
 Load a model in LM Studio and click **Start Local Server** (default port 1234).
 
 **"llama.cpp is not reachable"**  
-Make sure `llama-server` is running with `--port 8080` and check the URL with `/doctor`.
+Normally auto-starts on its own — check `/doctor` for what's wrong. If auto-start failed, the error is printed on launch before the TUI opens.
+
+**"Configured model not found: ..."**  
+`/config llamacpp model` or `binary` points at a path that doesn't exist. Double check it with `/config llamacpp` (no args) — this fails loudly on purpose instead of silently falling back to the default model.
+
+**"llama.cpp request timed out" / "stream stalled"**  
+No response for 15 minutes — usually the CPU is busy with something else, or the context is too large to process in time. Free up CPU, lower `/config llamacpp context <n>`, or just retry.
 
 **"Model not found"**  
 Use `/models` to list loaded models, `/model` to switch.
