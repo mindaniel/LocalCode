@@ -1,7 +1,10 @@
-import React, { useState, useCallback, useEffect } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
 import { Box, Text, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import { COMMAND_SUGGESTIONS, BUILTIN_COMMANDS } from '../shared/constants'
+
+const PASTE_START = '\x1b[200~'
+const PASTE_END = '\x1b[201~'
 
 interface Props {
   onSubmit: (value: string) => void
@@ -24,6 +27,8 @@ export const InputBar: React.FC<Props> = ({ onSubmit, isAgentRunning, history })
   const [value, setValue] = useState('')
   const [histIndex, setHistIndex] = useState(-1)
   const [cols, setCols] = useState(process.stdout.columns || 80)
+  const [isPasting, setIsPasting] = useState(false)
+  const pasteBufRef = useRef('')
 
   useEffect(() => {
     const handleResize = () => setCols(process.stdout.columns || 80)
@@ -31,9 +36,38 @@ export const InputBar: React.FC<Props> = ({ onSubmit, isAgentRunning, history })
     return () => { process.stdout.off('resize', handleResize) }
   }, [])
 
+  // Bracketed paste: terminal wraps a paste in \x1b[200~ ... \x1b[201~ so we can
+  // tell "many Enters from a paste" apart from "many Enters from typing". Without
+  // this, ink-text-input submits on every embedded newline — one message per line.
+  useEffect(() => {
+    process.stdout.write('\x1b[?2004h')
+    return () => { process.stdout.write('\x1b[?2004l') }
+  }, [])
+
   const suggestion = isAgentRunning ? '' : getSuggestion(value, history)
 
-  useInput((_ch, key) => {
+  useInput((rawInput, key) => {
+    let input = rawInput
+
+    if (!isPasting && input.includes(PASTE_START)) {
+      setIsPasting(true)
+      pasteBufRef.current = ''
+      input = input.slice(input.indexOf(PASTE_START) + PASTE_START.length)
+    }
+
+    if (isPasting || pasteBufRef.current !== '' || input !== rawInput) {
+      const endIdx = input.indexOf(PASTE_END)
+      if (endIdx !== -1) {
+        pasteBufRef.current += input.slice(0, endIdx)
+        setValue(value + pasteBufRef.current)
+        pasteBufRef.current = ''
+        setIsPasting(false)
+      } else {
+        pasteBufRef.current += input
+      }
+      return
+    }
+
     if (key.tab && suggestion && !isAgentRunning) {
       setValue(value + suggestion)
       return
@@ -80,7 +114,7 @@ export const InputBar: React.FC<Props> = ({ onSubmit, isAgentRunning, history })
               ? 'Running… Ctrl+C to abort'
               : 'Ask AI or enter command…'
           }
-          focus={!isAgentRunning}
+          focus={!isAgentRunning && !isPasting}
         />
         {suggestion && <Text color="#374151">{suggestion}</Text>}
       </Box>
