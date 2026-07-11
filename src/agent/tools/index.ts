@@ -9,6 +9,7 @@ import {
 import { webFetchTool, httpRequestTool } from './network'
 import { lspCheckTool, lspHoverTool, lspDefinitionTool } from './lsp'
 import { gitBranchTool, gitStashTool, runTestsTool } from './git'
+import { askAgentTool } from './agents'
 
 export async function executeTool(toolCall: ToolCall, cwd: string): Promise<ToolResult> {
   const { tool, arguments: args } = toolCall
@@ -79,6 +80,10 @@ export async function executeTool(toolCall: ToolCall, cwd: string): Promise<Tool
           args.headers as Record<string, string> | undefined,
           args.body,
         )
+
+      // ── Multi-agent ───────────────────────────────────────────────────────────
+      case 'ask_agent':
+        return askAgentTool(String(args.agent || ''), String(args.prompt || ''))
 
       // ── LSP / Diagnostics ─────────────────────────────────────────────────────
       case 'lsp_check':

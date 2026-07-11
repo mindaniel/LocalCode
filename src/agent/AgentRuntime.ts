@@ -19,7 +19,7 @@ const READ_ONLY_TOOLS = new Set([
   'read_file', 'list_files', 'find_files', 'search_files',
   'git_status', 'git_diff', 'git_log', 'lsp_check',
   'lsp_hover', 'lsp_definition',
-  'run_tests', 'web_fetch',
+  'run_tests', 'web_fetch', 'ask_agent',
 ])
 
 export class AgentRuntime extends EventEmitter {
@@ -131,8 +131,16 @@ export class AgentRuntime extends EventEmitter {
           .join('\n')
       : ''
 
+    const agentNames = Object.keys(config.llamaCppAgents ?? {})
+    const agentsSection = agentNames.length > 0
+      ? '\n\n### Other Agents\n' +
+        `You can delegate a sub-task to another running model with **ask_agent**. Available: ${agentNames.join(', ')}.\n` +
+        '  {"tool": "ask_agent", "arguments": {"agent": "<name>", "prompt": "<what you want it to answer>"}}\n' +
+        '  Use this to split work across models (e.g. a fast small model for a quick lookup while you keep working), not for anything requiring file/tool access — the other agent only sees the prompt text you give it.'
+      : ''
+
     const messages: Message[] = [
-      { role: 'system', content: AGENT_SYSTEM_PROMPT + pluginSection },
+      { role: 'system', content: AGENT_SYSTEM_PROMPT + pluginSection + agentsSection },
       ...history,
       { role: 'user', content: userContent, ...(images.length ? { images } : {}) },
     ]
